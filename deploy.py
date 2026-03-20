@@ -1089,7 +1089,7 @@ Examples:
     parser.add_argument(
         "--tenant-id",
         default=os.environ.get("AZURE_TENANT_ID"),
-        help="Azure AD tenant ID (for service principal auth). Env: AZURE_TENANT_ID",
+        help="Microsoft Entra ID tenant ID (for service principal auth). Env: AZURE_TENANT_ID",
     )
     parser.add_argument(
         "--client-id",

@@ -427,17 +427,17 @@ Credential Chain:
     parser.add_argument(
         "--tenant-id",
         default=os.getenv("AZURE_TENANT_ID"),
-        help="Azure AD tenant ID (for service principal auth). Env: AZURE_TENANT_ID",
+        help="Microsoft Entra ID tenant ID (for service principal auth). Env: AZURE_TENANT_ID",
     )
     parser.add_argument(
         "--client-id",
         default=os.getenv("AZURE_CLIENT_ID"),
-        help="Azure AD client ID (for service principal auth). Env: AZURE_CLIENT_ID",
+        help="Microsoft Entra ID client ID (for service principal auth). Env: AZURE_CLIENT_ID",
     )
     parser.add_argument(
         "--client-secret",
         default=os.getenv("AZURE_CLIENT_SECRET"),
-        help="Azure AD client secret (for service principal auth). Env: AZURE_CLIENT_SECRET",
+        help="Microsoft Entra ID client secret (for service principal auth). Env: AZURE_CLIENT_SECRET",
     )
     
     # Pipeline control flags

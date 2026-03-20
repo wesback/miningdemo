@@ -105,17 +105,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tenant-id",
         default=os.getenv("AZURE_TENANT_ID"),
-        help="Azure AD tenant ID (for service principal auth). Default: AZURE_TENANT_ID env var",
+        help="Microsoft Entra ID tenant ID (for service principal auth). Default: AZURE_TENANT_ID env var",
     )
     parser.add_argument(
         "--client-id",
         default=os.getenv("AZURE_CLIENT_ID"),
-        help="Azure AD client/application ID (for service principal auth). Default: AZURE_CLIENT_ID env var",
+        help="Microsoft Entra ID client/application ID (for service principal auth). Default: AZURE_CLIENT_ID env var",
     )
     parser.add_argument(
         "--client-secret",
         default=os.getenv("AZURE_CLIENT_SECRET"),
-        help="Azure AD client secret (for service principal auth). Default: AZURE_CLIENT_SECRET env var",
+        help="Microsoft Entra ID client secret (for service principal auth). Default: AZURE_CLIENT_SECRET env var",
     )
     parser.add_argument(
         "--mapping",

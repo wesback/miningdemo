@@ -66,7 +66,7 @@
 
 ### 2026-03-20 — Comprehensive CI/CD Setup Documentation
 - **Created:** `docs/CICD_SETUP.md` — Comprehensive guide for automated deployment via GitHub Actions
-- **Scope:** Covers full setup lifecycle from Azure AD app registration through successful deployment
+- **Scope:** Covers full setup lifecycle from Microsoft Entra ID app registration through successful deployment
 - **Key Sections:**
   1. **Prerequisites:** Azure subscription, Fabric workspace, permissions needed
   2. **Service Principal Creation:** Azure Portal and Azure CLI methods with API permissions setup

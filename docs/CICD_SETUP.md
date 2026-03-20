@@ -24,11 +24,11 @@ Before you begin, ensure you have:
 |-------------|-------------|
 | **Azure Subscription** | With Microsoft Fabric capacity (F2+) or a Fabric Trial enabled |
 | **Fabric Workspace** | A workspace with Fabric capacity assigned |
-| **Azure Permissions** | Ability to create Azure AD App Registrations (Application Developer or higher) |
+| **Azure Permissions** | Ability to create Microsoft Entra ID App Registrations (Application Developer or higher) |
 | **Fabric Workspace Permissions** | Admin or Contributor role on the target workspace |
 | **GitHub Repository** | This repo forked/cloned with Actions enabled |
 
-> ⚠️ **Important**: The service principal must be added **both** to Azure AD (for authentication) **and** to the Fabric workspace (for resource management).
+> ⚠️ **Important**: The service principal must be added **both** to Microsoft Entra ID (for authentication) **and** to the Fabric workspace (for resource management).
 
 ---
 
@@ -38,9 +38,9 @@ A **service principal** (enterprise application) allows GitHub Actions to authen
 
 ### Option A: Azure Portal (Recommended)
 
-1. **Navigate to Azure Active Directory:**
+1. **Navigate to Microsoft Entra ID:**
    - Open the [Azure Portal](https://portal.azure.com)
-   - Search for and select **Azure Active Directory**
+   - Search for and select **Microsoft Entra ID**
 
 2. **Create an App Registration:**
    - In the left menu, click **App registrations**
@@ -76,7 +76,7 @@ A **service principal** (enterprise application) allows GitHub Actions to authen
    - Click **Add permissions**
    - If required by your organization, click **Grant admin consent for [Your Organization]**
 
-> **Tip:** Some organizations require admin consent for API permissions. If you see a warning icon, contact your Azure AD administrator.
+> **Tip:** Some organizations require admin consent for API permissions. If you see a warning icon, contact your Microsoft Entra ID administrator.
 
 ### Option B: Azure CLI
 
@@ -163,11 +163,11 @@ The Kusto cluster URI is required **only for historical data ingestion** (option
 
 ### AZURE_TENANT_ID
 
-Your Azure Active Directory tenant identifier.
+Your Microsoft Entra ID tenant identifier.
 
 **How to find it:**
 1. Open the [Azure Portal](https://portal.azure.com)
-2. Navigate to **Azure Active Directory**
+2. Navigate to **Microsoft Entra ID**
 3. Click **Overview** in the left menu
 4. Copy the **Tenant ID** (under "Tenant information")
 
@@ -201,7 +201,7 @@ GitHub Secrets allow you to securely store credentials for use in GitHub Actions
 
 | Secret Name | Value | Required For |
 |-------------|-------|--------------|
-| `AZURE_TENANT_ID` | Your Azure AD Tenant ID (from Step 3) | Both deploy and historical-data jobs |
+| `AZURE_TENANT_ID` | Your Microsoft Entra ID Tenant ID (from Step 3) | Both deploy and historical-data jobs |
 | `AZURE_CLIENT_ID` | Your service principal's Application ID (from Step 2) | Both deploy and historical-data jobs |
 | `AZURE_CLIENT_SECRET` | Your service principal's secret value (from Step 2) | Both deploy and historical-data jobs |
 | `FABRIC_WORKSPACE_ID` | Your Fabric workspace GUID (from Step 3) | Deploy job |
@@ -326,7 +326,7 @@ pip install azure-identity requests
 python deploy.py --workspace-id <your-workspace-guid>
 ```
 
-This will open a browser window for Azure AD authentication.
+This will open a browser window for Microsoft Entra ID authentication.
 
 **What gets deployed:**
 - For a complete list of Fabric items and schema details, see the [README Deployment Guide](../README.md#deployment-guide)
@@ -408,7 +408,7 @@ Common issues and their solutions:
 | **401 Unauthorized** | Service principal secret expired or incorrect | Regenerate the client secret in Azure Portal → App registrations → Certificates & secrets, then update the `AZURE_CLIENT_SECRET` GitHub secret |
 | **403 Forbidden** | Service principal not added to Fabric workspace | Add the SP to the workspace: Workspace settings → Manage access → Add the SP as Contributor or Admin |
 | **403 Forbidden (API permissions)** | Missing API consent for Fabric | In Azure Portal → App registrations → API permissions → Add `Power BI Service` permission → Grant admin consent |
-| **Invalid tenant error** | Wrong `AZURE_TENANT_ID` | Verify the Tenant ID in Azure AD Overview matches the secret value |
+| **Invalid tenant error** | Wrong `AZURE_TENANT_ID` | Verify the Tenant ID in Microsoft Entra ID Overview matches the secret value |
 | **SP not in workspace** | Role assignment missing | SPs must be added via **Workspace settings → Manage access**, not just Azure RBAC |
 | **Missing secrets in CI** | One or more GitHub secrets not configured | The workflow validation step will list missing secrets. Add them in Settings → Secrets and variables → Actions |
 | **FABRIC_CLUSTER_URI format error** | Incorrect URI format | Must be `https://<guid>.kusto.fabric.microsoft.com` — no trailing slash, no path like `/MiningOps` |
