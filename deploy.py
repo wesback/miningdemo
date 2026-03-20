@@ -187,9 +187,9 @@ class FabricClient:
             return result
         elif resp.status_code == 202:
             op_result = self._wait_for_operation(resp, item_type)
-            if op_result:
+            if op_result and "id" in op_result:
                 return op_result
-            # Try to find the item by name
+            # Operation succeeded but response lacks item details — look up by name
             return self.get_item_by_name(item_type, display_name)
         elif resp.status_code == 409 or (
             resp.status_code == 400 and "ItemDisplayNameAlreadyInUse" in resp.text
