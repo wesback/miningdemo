@@ -779,7 +779,7 @@ def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any
     def q(key: str, text: str) -> dict[str, Any]:
         return {
             "id":            q_id[key],
-            "dataSource":    {"kind": "KQLDatabase", "dataSourceId": ds_id},
+            "dataSource":    {"kind": "inline", "dataSourceId": ds_id},
             "text":          text,
             "usedVariables": [],
         }
@@ -1028,25 +1028,25 @@ ProductionMetrics
 
     tiles = [
         # ── Page 1: Operations Overview ───────────────────────────────
-        tile("active-equipment",   "Active Equipment Count",      "ops",        "stat",    0, 0, 4, 3),
-        tile("shift-tonnage",      "Shift Tonnage vs Target",     "ops",        "bar",     4, 0, 6, 3),
-        tile("equipment-map",      "Equipment Status Map",        "ops",        "map",     0, 3, 6, 4),
-        tile("active-alerts",      "Active Alerts",               "ops",        "table",   6, 3, 6, 4),
+        tile("active-equipment",   "Active Equipment Count",      "ops",        "stat",    0,  0, 10, 7),
+        tile("shift-tonnage",      "Shift Tonnage vs Target",     "ops",        "bar",    10,  0, 10, 7),
+        tile("equipment-map",      "Equipment Status Map",        "ops",        "map",     0,  7, 10, 8),
+        tile("active-alerts",      "Active Alerts",               "ops",        "table",  10,  7, 10, 8),
         # ── Page 2: Safety & Environment ──────────────────────────────
-        tile("gas-levels",         "Gas Levels by Zone",          "safety",     "line",    0, 0, 8, 4),
-        tile("temp-heatmap",       "Temperature Heat Map",        "safety",     "table",   8, 0, 4, 4),
-        tile("threshold-breaches", "Threshold Breaches 24h",      "safety",     "table",   0, 4, 6, 4),
-        tile("safety-incidents",   "Safety Incident Timeline",    "safety",     "table",   6, 4, 6, 4),
+        tile("gas-levels",         "Gas Levels by Zone",          "safety",     "line",    0,  0, 12, 8),
+        tile("temp-heatmap",       "Temperature Heat Map",        "safety",     "table",   12, 0,  8, 8),
+        tile("threshold-breaches", "Threshold Breaches 24h",      "safety",     "table",   0,  8, 10, 8),
+        tile("safety-incidents",   "Safety Incident Timeline",    "safety",     "table",  10,  8, 10, 8),
         # ── Page 3: Equipment Health ───────────────────────────────────
-        tile("vibration-anomaly",      "Vibration Anomaly Trend",  "equipment",  "scatter", 0, 0, 6, 4),
-        tile("drill-hydraulic",        "Drill Hydraulic Pressure", "equipment",  "line",    6, 0, 6, 4),
-        tile("equipment-health-scores","Equipment Health Scores",  "equipment",  "table",   0, 4, 6, 4),
-        tile("equipment-utilisation",  "Equipment Utilisation",    "equipment",  "bar",     6, 4, 6, 4),
+        tile("vibration-anomaly",      "Vibration Anomaly Trend",  "equipment",  "scatter", 0,  0, 10, 8),
+        tile("drill-hydraulic",        "Drill Hydraulic Pressure", "equipment",  "line",   10,  0, 10, 8),
+        tile("equipment-health-scores","Equipment Health Scores",  "equipment",  "table",   0,  8, 10, 8),
+        tile("equipment-utilisation",  "Equipment Utilisation",    "equipment",  "bar",    10,  8, 10, 8),
         # ── Page 4: Production ─────────────────────────────────────────
-        tile("conveyor-throughput", "Conveyor Throughput Trend",  "production", "area",    0, 0, 8, 4),
-        tile("truck-cycle-times",   "Haul Truck Cycle Times",     "production", "bar",     8, 0, 4, 4),
-        tile("route-efficiency",    "Route Efficiency",           "production", "table",   0, 4, 6, 4),
-        tile("production-7d",       "7-Day Production Trend",     "production", "line",    6, 4, 6, 4),
+        tile("conveyor-throughput", "Conveyor Throughput Trend",  "production", "area",    0,  0, 12, 8),
+        tile("truck-cycle-times",   "Haul Truck Cycle Times",     "production", "bar",    12,  0,  8, 8),
+        tile("route-efficiency",    "Route Efficiency",           "production", "table",   0,  8, 10, 8),
+        tile("production-7d",       "7-Day Production Trend",     "production", "line",   10,  8, 10, 8),
     ]
 
     dashboard_json = {
