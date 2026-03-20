@@ -1,0 +1,279 @@
+name: Deploy to Microsoft Fabric
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy.py'
+      - 'kql/**'
+      - 'dashboard/**'
+      - 'simulator/**'
+  workflow_dispatch:
+    inputs:
+      include_historical:
+        description: 'Generate and ingest historical data (31 days)'
+        required: false
+        type: boolean
+        default: false
+      history_days:
+        description: 'Days of historical data to generate (if enabled)'
+        required: false
+        type: number
+        default: 31
+
+# Prevent concurrent deployments to the same workspace
+concurrency:
+  group: fabric-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Fabric Resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: 'simulator/requirements.txt'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install azure-identity~=1.15.0 requests~=2.31.0
+        
+      - name: Validate required secrets
+        run: |
+          echo "Validating deployment configuration..."
+          
+          missing_secrets=()
+          [[ -z "${{ secrets.FABRIC_WORKSPACE_ID }}" ]] && missing_secrets+=("FABRIC_WORKSPACE_ID")
+          [[ -z "${{ secrets.AZURE_TENANT_ID }}" ]] && missing_secrets+=("AZURE_TENANT_ID")
+          [[ -z "${{ secrets.AZURE_CLIENT_ID }}" ]] && missing_secrets+=("AZURE_CLIENT_ID")
+          [[ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ]] && missing_secrets+=("AZURE_CLIENT_SECRET")
+          
+          if [ ${#missing_secrets[@]} -gt 0 ]; then
+            echo "❌ ERROR: Missing required secrets:"
+            printf '  - %s\n' "${missing_secrets[@]}"
+            echo ""
+            echo "Configure these in: Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets present"
+      
+      - name: Deploy to Fabric workspace
+        id: deploy
+        run: |
+          echo "Starting deployment to Fabric workspace..."
+          echo ""
+          
+          python deploy.py \
+            --workspace-id "${{ secrets.FABRIC_WORKSPACE_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --client-secret "${{ secrets.AZURE_CLIENT_SECRET }}"
+          
+          deploy_exit=$?
+          
+          if [ $deploy_exit -eq 0 ]; then
+            echo "✅ Deployment completed successfully"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Deployment failed with exit code $deploy_exit"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit $deploy_exit
+          fi
+      
+      - name: Generate deployment summary
+        if: always()
+        run: |
+          echo "# 🚀 Fabric Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.deploy.outputs.status }}" = "success" ]; then
+            echo "## ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Committed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Deployed Resources" >> $GITHUB_STEP_SUMMARY
+            echo "- Eventhouse: MiningRTI" >> $GITHUB_STEP_SUMMARY
+            echo "- KQL Database: MiningOps" >> $GITHUB_STEP_SUMMARY
+            echo "- Eventstream: MiningSensorStream" >> $GITHUB_STEP_SUMMARY
+            echo "- KQL Queryset: MiningOps-Queries" >> $GITHUB_STEP_SUMMARY
+            echo "- Real-Time Dashboard: Mining Operations" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+            echo "1. Open the Eventstream in Fabric and configure source + destination" >> $GITHUB_STEP_SUMMARY
+            echo "2. Copy the Eventstream connection string" >> $GITHUB_STEP_SUMMARY
+            echo "3. Run the simulator: \`python simulator/simulator.py --interval 10\`" >> $GITHUB_STEP_SUMMARY
+            echo "4. View live data in the Real-Time Dashboard" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Failed commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for detailed error messages." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Triggered by: ${{ github.event_name }}_" >> $GITHUB_STEP_SUMMARY
+
+  historical-data:
+    name: Generate and Ingest Historical Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: deploy
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.include_historical == 'true'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: 'simulator/requirements.txt'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r simulator/requirements.txt
+          pip install azure-kusto-data~=4.3.0 azure-kusto-ingest~=4.3.0
+      
+      - name: Validate historical data secrets
+        run: |
+          echo "Validating historical data configuration..."
+          
+          missing_secrets=()
+          [[ -z "${{ secrets.FABRIC_CLUSTER_URI }}" ]] && missing_secrets+=("FABRIC_CLUSTER_URI")
+          [[ -z "${{ secrets.AZURE_TENANT_ID }}" ]] && missing_secrets+=("AZURE_TENANT_ID")
+          [[ -z "${{ secrets.AZURE_CLIENT_ID }}" ]] && missing_secrets+=("AZURE_CLIENT_ID")
+          [[ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ]] && missing_secrets+=("AZURE_CLIENT_SECRET")
+          
+          if [ ${#missing_secrets[@]} -gt 0 ]; then
+            echo "❌ ERROR: Missing required secrets for historical data ingestion:"
+            printf '  - %s\n' "${missing_secrets[@]}"
+            echo ""
+            echo "Configure these in: Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets present"
+      
+      - name: Generate historical data
+        id: generate
+        run: |
+          echo "Generating ${{ github.event.inputs.history_days || 31 }} days of historical data..."
+          
+          python simulator/generate_history.py \
+            --days ${{ github.event.inputs.history_days || 31 }} \
+            --output-dir simulator/historical_data
+          
+          generate_exit=$?
+          
+          if [ $generate_exit -eq 0 ]; then
+            echo "✅ Historical data generation completed"
+            echo "status=success" >> $GITHUB_OUTPUT
+            
+            # Get file sizes for summary
+            if [ -f simulator/historical_data/SensorReadings.csv ]; then
+              sensor_size=$(du -h simulator/historical_data/SensorReadings.csv | cut -f1)
+              echo "sensor_size=$sensor_size" >> $GITHUB_OUTPUT
+            fi
+            if [ -f simulator/historical_data/SafetyIncidents.csv ]; then
+              safety_size=$(du -h simulator/historical_data/SafetyIncidents.csv | cut -f1)
+              echo "safety_size=$safety_size" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Historical data generation failed"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit $generate_exit
+          fi
+      
+      - name: Ingest historical data
+        id: ingest
+        if: steps.generate.outputs.status == 'success'
+        run: |
+          echo "Ingesting historical data into Fabric workspace..."
+          
+          # Get cluster URI from deploy.py output or construct from workspace
+          # For now, we'll use the environment variable pattern
+          export FABRIC_CLUSTER_URI="${{ secrets.FABRIC_CLUSTER_URI }}"
+          
+          python simulator/deploy_history.py \
+            --skip-generate \
+            --cluster "${{ secrets.FABRIC_CLUSTER_URI }}" \
+            --database MiningOps \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --client-secret "${{ secrets.AZURE_CLIENT_SECRET }}"
+          
+          ingest_exit=$?
+          
+          if [ $ingest_exit -eq 0 ]; then
+            echo "✅ Historical data ingestion completed"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Historical data ingestion failed"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit $ingest_exit
+          fi
+      
+      - name: Upload generated CSV as artifact
+        if: always() && steps.generate.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-data-csv
+          path: simulator/historical_data/*.csv
+          retention-days: 7
+      
+      - name: Generate historical data summary
+        if: always()
+        run: |
+          echo "# 📊 Historical Data Processing" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.generate.outputs.status }}" = "success" ]; then
+            echo "## ✅ Generation Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Days generated:** ${{ github.event.inputs.history_days || 31 }}" >> $GITHUB_STEP_SUMMARY
+            echo "**SensorReadings.csv:** ${{ steps.generate.outputs.sensor_size || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+            echo "**SafetyIncidents.csv:** ${{ steps.generate.outputs.safety_size || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ steps.ingest.outputs.status }}" = "success" ]; then
+              echo "## ✅ Ingestion Successful" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "Historical data has been loaded into the MiningOps database." >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "CSV files are available as workflow artifacts for 7 days." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ❌ Ingestion Failed" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "CSV generation succeeded but ingestion failed." >> $GITHUB_STEP_SUMMARY
+              echo "Download the CSV artifacts and manually ingest using KQL commands." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "## ❌ Generation Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Failed to generate historical data CSV files." >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for error details." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Days requested: ${{ github.event.inputs.history_days || 31 }}_" >> $GITHUB_STEP_SUMMARY

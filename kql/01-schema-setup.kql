@@ -2,41 +2,56 @@
 // Mining Real-Time Intelligence — KQL Database Schema Setup
 // Run EACH command block ONE AT A TIME in a KQL Queryset connected to MiningOps.
 // Select a single command (from the dot to the end of its block) then click Run.
+//
+// ⚠️ IDEMPOTENCY BEHAVIOR:
+// - These commands use .create (tables) and .create-or-alter (functions)
+// - RE-RUNNING will produce "already exists" errors for tables — this is EXPECTED
+// - deploy.py handles these errors gracefully and continues execution
+// - Manual re-runs: Use .create-merge for tables to preserve data, or drop first
+// - Functions use .create-or-alter (safe to re-run)
+// - Update policies and retention/caching settings can be safely re-applied
 // =============================================================================
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 1: Landing table — all raw sensor events from Eventstream
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table SensorReadings (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 2: JSON ingestion mapping for Eventstream / Event Hub
+// NOTE: Ingestion mappings are created with implicit .create-or-alter behavior.
+//       Re-running will update the mapping if it exists. Safe to re-run.
 // ---------------------------------------------------------------------------
 .create table SensorReadings ingestion json mapping "SensorReadingsJsonMapping" '[{"column":"EventId","path":"$.EventId","datatype":"string"},{"column":"EquipmentId","path":"$.EquipmentId","datatype":"string"},{"column":"EquipmentType","path":"$.EquipmentType","datatype":"string"},{"column":"SensorType","path":"$.SensorType","datatype":"string"},{"column":"Value","path":"$.Value","datatype":"real"},{"column":"Unit","path":"$.Unit","datatype":"string"},{"column":"Zone","path":"$.Zone","datatype":"string"},{"column":"Latitude","path":"$.Latitude","datatype":"real"},{"column":"Longitude","path":"$.Longitude","datatype":"real"},{"column":"Timestamp","path":"$.Timestamp","datatype":"datetime"},{"column":"Quality","path":"$.Quality","datatype":"string"},{"column":"Shift","path":"$.Shift","datatype":"string"}]'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 3: Materialised table — equipment telemetry
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table EquipmentTelemetry (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 4: Materialised table — environmental readings
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table EnvironmentalReadings (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 5: Materialised table — production metrics
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table ProductionMetrics (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 6: Update policy function — equipment telemetry filter
+// NOTE: .create-or-alter is idempotent — safe to re-run without errors.
 // ---------------------------------------------------------------------------
 .create-or-alter function EquipmentTelemetryFilter() {
     SensorReadings
@@ -47,6 +62,7 @@
 
 // ---------------------------------------------------------------------------
 // COMMAND 7: Update policy function — environmental readings filter
+// NOTE: .create-or-alter is idempotent — safe to re-run without errors.
 // ---------------------------------------------------------------------------
 .create-or-alter function EnvironmentalReadingsFilter() {
     SensorReadings
@@ -56,6 +72,7 @@
 
 // ---------------------------------------------------------------------------
 // COMMAND 8: Update policy function — production metrics filter
+// NOTE: .create-or-alter is idempotent — safe to re-run without errors.
 // ---------------------------------------------------------------------------
 .create-or-alter function ProductionMetricsFilter() {
     SensorReadings
@@ -65,107 +82,125 @@
 
 // ---------------------------------------------------------------------------
 // COMMAND 9: Attach update policy — EquipmentTelemetry
+// NOTE: .alter replaces the entire policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EquipmentTelemetry policy update '[{"IsEnabled":true,"Source":"SensorReadings","Query":"EquipmentTelemetryFilter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 10: Attach update policy — EnvironmentalReadings
+// NOTE: .alter replaces the entire policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EnvironmentalReadings policy update '[{"IsEnabled":true,"Source":"SensorReadings","Query":"EnvironmentalReadingsFilter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 11: Attach update policy — ProductionMetrics
+// NOTE: .alter replaces the entire policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table ProductionMetrics policy update '[{"IsEnabled":true,"Source":"SensorReadings","Query":"ProductionMetricsFilter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 12: Reference table — equipment registry
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table EquipmentRegistry (EquipmentId: string, EquipmentType: string, Make: string, Model: string, YearCommissioned: int, Zone: string, Status: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 13: Reference table — alert thresholds
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table AlertThresholds (SensorType: string, WarningLow: real, WarningHigh: real, CriticalLow: real, CriticalHigh: real, Unit: string, Description: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 14: Reference table — safety incidents
+// NOTE: .create will fail if table exists. Use .create-merge to preserve data on re-run.
 // ---------------------------------------------------------------------------
 .create table SafetyIncidents (IncidentId: string, Timestamp: datetime, Zone: string, Severity: string, Description: string, EquipmentId: string)
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 15: Enable streaming ingestion — SensorReadings
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table SensorReadings policy streamingingestion '{"IsEnabled": true}'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 16: Enable streaming ingestion — EquipmentTelemetry
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EquipmentTelemetry policy streamingingestion '{"IsEnabled": true}'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 17: Enable streaming ingestion — EnvironmentalReadings
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EnvironmentalReadings policy streamingingestion '{"IsEnabled": true}'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 18: Enable streaming ingestion — ProductionMetrics
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table ProductionMetrics policy streamingingestion '{"IsEnabled": true}'
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 19: Retention — SensorReadings
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table SensorReadings policy retention softdelete = 365d recoverability = enabled
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 20: Caching — SensorReadings
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table SensorReadings policy caching hot = 90d
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 21: Retention — EquipmentTelemetry
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EquipmentTelemetry policy retention softdelete = 365d recoverability = enabled
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 22: Caching — EquipmentTelemetry
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EquipmentTelemetry policy caching hot = 90d
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 23: Retention — EnvironmentalReadings
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EnvironmentalReadings policy retention softdelete = 365d recoverability = enabled
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 24: Caching — EnvironmentalReadings
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table EnvironmentalReadings policy caching hot = 90d
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 25: Retention — ProductionMetrics
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table ProductionMetrics policy retention softdelete = 365d recoverability = enabled
 
 
 // ---------------------------------------------------------------------------
 // COMMAND 26: Caching — ProductionMetrics
+// NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
 .alter table ProductionMetrics policy caching hot = 90d

@@ -1,5 +1,18 @@
 #!/bin/sh
 set -e
+# ============================================================================
+# DEPRECATED: This script is NOT required for the Mining RTI demo.
+# ============================================================================
+# This is a standard Docker installation script downloaded from get.docker.com.
+# It was included in an earlier phase of development but is no longer needed.
+# The demo does NOT require Docker — all components run directly in Microsoft
+# Fabric (Eventhouse, Eventstream, Real-Time Dashboard) and the simulator is a
+# standalone Python script.
+#
+# If you need Docker for other purposes, please download the latest version
+# from https://get.docker.com or use your OS package manager.
+# ============================================================================
+#
 # Docker Engine for Linux installation script.
 #
 # This script is intended as a convenient way to configure docker's package

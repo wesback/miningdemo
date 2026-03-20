@@ -1,6 +1,10 @@
 # Real-Time Dashboard — Tile Configuration
 # This file documents every dashboard tile, its visual type, data source query,
 # and configuration. Use it as a blueprint when building in the Fabric portal.
+#
+# **KQL Query Reference:** All named queries referenced in this document are defined in
+# `kql/03-queries.kql`. For ad-hoc queries embedded directly in tiles, the full KQL is
+# provided inline below. Named queries follow the format `Query: QueryName` in the source file.
 
 ## Dashboard: Mining Operations — Real-Time Intelligence
 
@@ -193,7 +197,7 @@ EquipmentTelemetry
 ### Tile 3.3 — Equipment Health Scores (Conditional Table)
 - **Visual type:** Table with conditional formatting
 - **Auto-refresh:** 4 hours (manual or scheduled)
-- **KQL Query:** (full EquipmentHealthScores query from 03-queries.kql)
+- **KQL Query:** `EquipmentHealthScores` (from `kql/03-queries.kql`)
 - **Conditional formatting:** Critical (< 40) = red, Warning (40-69) = amber, Healthy (≥ 70) = green
 
 ### Tile 3.4 — Equipment Utilisation (Bar Chart)
@@ -257,7 +261,7 @@ ProductionMetrics
 ### Tile 4.3 — Route Efficiency (Table)
 - **Visual type:** Table
 - **Auto-refresh:** 5 minutes
-- **KQL Query:** (RouteEfficiency from 03-queries.kql)
+- **KQL Query:** `RouteEfficiency` (from `kql/03-queries.kql`)
 - **Conditional formatting:** Flagged = true → red row highlight
 
 ### Tile 4.4 — 7-Day Production Trend (Line Chart)

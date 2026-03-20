@@ -40,7 +40,10 @@ import random
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
+
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -227,7 +230,12 @@ def gps_jitter(base_lat: float, base_lon: float, eq_type: str) -> tuple[float, f
 # Main Generator
 # ---------------------------------------------------------------------------
 def generate_history(days: int, interval_sec: int, output_dir: Path) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.error("Failed to create output directory %s: %s", output_dir, e)
+        raise
+
     sensor_file = output_dir / "SensorReadings.csv"
     incidents_file = output_dir / "SafetyIncidents.csv"
 
@@ -263,78 +271,104 @@ def generate_history(days: int, interval_sec: int, output_dir: Path) -> None:
             anomaly_windows[key] = (anom_val, desc)
             t += timedelta(seconds=interval_sec)
 
-    # Estimate total rows for progress logging
+    # Estimate total rows for progress bar
     steps_per_day = (24 * 3600) // interval_sec
     sensors_per_step = sum(len(SENSOR_PROFILES[eq_type]) for _, eq_type, _ in EQUIPMENT)
     total_rows = days * steps_per_day * sensors_per_step
     log.info("Generating %d days of data (%s estimated rows)…", days, f"{total_rows:,}")
     log.info("Interval: %d seconds | Output: %s", interval_sec, sensor_file)
 
+    # Buffered write configuration
+    BUFFER_SIZE = 5000  # Write every 5000 rows
+    row_buffer: list[list] = []
     row_count = 0
-    with open(sensor_file, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "EventId", "EquipmentId", "EquipmentType", "SensorType",
-            "Value", "Unit", "Zone", "Latitude", "Longitude",
-            "Timestamp", "Quality", "Shift",
-        ])
 
-        current = start_time
-        day_num = 0
-        last_logged_day = -1
+    try:
+        with open(sensor_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "EventId", "EquipmentId", "EquipmentType", "SensorType",
+                "Value", "Unit", "Zone", "Latitude", "Longitude",
+                "Timestamp", "Quality", "Shift",
+            ])
 
-        while current < end_time:
-            day_offset = (current - start_time).days
-            hour = current.hour
-            minute_key = current.strftime("%Y-%m-%dT%H:%M")
-            shift = get_shift(hour)
-            weekend = is_weekend(current)
+            current = start_time
 
-            if day_offset != last_logged_day:
-                last_logged_day = day_offset
-                if day_offset % 5 == 0:
-                    log.info("  Day %d/%d (%s rows so far)…", day_offset + 1, days, f"{row_count:,}")
+            # Progress bar for sensor data generation
+            with tqdm(total=total_rows, desc="Generating sensor data", unit="rows") as pbar:
+                while current < end_time:
+                    day_offset = (current - start_time).days
+                    hour = current.hour
+                    minute_key = current.strftime("%Y-%m-%dT%H:%M")
+                    shift = get_shift(hour)
+                    weekend = is_weekend(current)
 
-            for eq_id, eq_type, zone in EQUIPMENT:
-                base_lat, base_lon = ZONE_COORDS[zone]
-                sensors = SENSOR_PROFILES[eq_type]
+                    for eq_id, eq_type, zone in EQUIPMENT:
+                        base_lat, base_lon = ZONE_COORDS[zone]
+                        sensors = SENSOR_PROFILES[eq_type]
 
-                for sensor_type, unit, mean, std, min_v, max_v in sensors:
-                    # Check if this is an anomaly window
-                    anom_key = (eq_id + ":" + sensor_type, minute_key)
-                    is_anom = anom_key in anomaly_windows
-                    anom_val = anomaly_windows[anom_key][0] if is_anom else None
+                        for sensor_type, unit, mean, std, min_v, max_v in sensors:
+                            # Check if this is an anomaly window
+                            anom_key = (eq_id + ":" + sensor_type, minute_key)
+                            is_anom = anom_key in anomaly_windows
+                            anom_val = anomaly_windows[anom_key][0] if is_anom else None
 
-                    value = generate_value(
-                        sensor_type, mean, std, min_v, max_v,
-                        hour, day_offset, eq_id, is_anom, anom_val, weekend,
-                    )
+                            value = generate_value(
+                                sensor_type, mean, std, min_v, max_v,
+                                hour, day_offset, eq_id, is_anom, anom_val, weekend,
+                            )
 
-                    lat, lon = gps_jitter(base_lat, base_lon, eq_type)
-                    quality = "good" if random.random() < 0.98 else "suspect"
+                            lat, lon = gps_jitter(base_lat, base_lon, eq_type)
+                            quality = "good" if random.random() < 0.98 else "suspect"
 
-                    writer.writerow([
-                        f"evt-{uuid.uuid4().hex[:8]}",
-                        eq_id, eq_type, sensor_type,
-                        value, unit, zone, lat, lon,
-                        current.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                        quality, shift,
-                    ])
-                    row_count += 1
+                            row_buffer.append([
+                                f"evt-{uuid.uuid4().hex[:8]}",
+                                eq_id, eq_type, sensor_type,
+                                value, unit, zone, lat, lon,
+                                current.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                                quality, shift,
+                            ])
+                            row_count += 1
+                            pbar.update(1)
 
-            current += timedelta(seconds=interval_sec)
+                            # Flush buffer when it reaches BUFFER_SIZE
+                            if len(row_buffer) >= BUFFER_SIZE:
+                                writer.writerows(row_buffer)
+                                row_buffer.clear()
+
+                    current += timedelta(seconds=interval_sec)
+
+                # Write any remaining buffered rows
+                if row_buffer:
+                    writer.writerows(row_buffer)
+                    row_buffer.clear()
+
+    except IOError as e:
+        log.error("Failed to write sensor data to %s: %s", sensor_file, e)
+        raise
+    except Exception as e:
+        log.error("Unexpected error during sensor data generation: %s", e)
+        raise
 
     log.info("Sensor data complete: %s rows written to %s", f"{row_count:,}", sensor_file)
-    file_size_mb = sensor_file.stat().st_size / (1024 * 1024)
-    log.info("File size: %.1f MB", file_size_mb)
+    
+    try:
+        file_size_mb = sensor_file.stat().st_size / (1024 * 1024)
+        log.info("File size: %.1f MB", file_size_mb)
+    except OSError as e:
+        log.warning("Could not determine file size: %s", e)
 
     # Write incidents CSV
-    with open(incidents_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "IncidentId", "Timestamp", "Zone", "Severity", "Description", "EquipmentId",
-        ])
-        writer.writeheader()
-        writer.writerows(incidents)
+    try:
+        with open(incidents_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "IncidentId", "Timestamp", "Zone", "Severity", "Description", "EquipmentId",
+            ])
+            writer.writeheader()
+            writer.writerows(incidents)
+    except IOError as e:
+        log.error("Failed to write incidents data to %s: %s", incidents_file, e)
+        raise
 
     log.info("Safety incidents: %d events written to %s", len(incidents), incidents_file)
 

@@ -221,13 +221,169 @@ class FabricClient:
 
 
 # ---------------------------------------------------------------------------
+# KQL Syntax Validation
+# ---------------------------------------------------------------------------
+def validate_kql_syntax(kql_content: str, filename: str) -> list[str]:
+    """Pre-validate KQL syntax for common issues before sending to API.
+    
+    This is a heuristic validation — NOT a full KQL parser. It catches common
+    structural errors that would fail immediately on the server:
+    - Mismatched parentheses, brackets, curly braces
+    - Unclosed string literals (single quotes in KQL)
+    - Empty command blocks (bare .create/.alter with no body)
+    
+    Args:
+        kql_content: The KQL script content to validate
+        filename: Name of the file being validated (for error messages)
+    
+    Returns:
+        List of warning messages. Empty list if no issues found.
+        These are warnings, not errors — deployment continues regardless.
+    
+    Limitations:
+        - Does NOT validate KQL semantics (table names, column types, etc.)
+        - Does NOT parse nested expressions or complex query logic
+        - May produce false positives for edge cases (comments, string escapes)
+        - Does NOT validate KQL-specific keywords or operators
+        - Does NOT validate pipe operators (too many false positives in valid KQL)
+    """
+    warnings = []
+    
+    # Track bracket/paren/brace counts
+    paren_count = 0
+    bracket_count = 0
+    brace_count = 0
+    in_string = False
+    
+    lines = kql_content.split('\n')
+    
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+        
+        # Skip comment lines
+        if stripped.startswith('//'):
+            continue
+        
+        # Check for empty command blocks (command with no body)
+        # Only flag single-word dot commands that look suspicious
+        if stripped.startswith('.') and len(stripped.split()) == 1 and len(stripped) < 20:
+            # Short single-word command — might be incomplete
+            # Longer ones like ".create" with complex args are fine
+            if not any(x in stripped.lower() for x in ['create', 'alter', 'set', 'delete']):
+                warnings.append(f"Line {line_num}: Possibly incomplete command '{stripped}'")
+        
+        # Character-by-character analysis for brackets and strings
+        i = 0
+        while i < len(line):
+            char = line[i]
+            
+            # Handle comments
+            if i < len(line) - 1 and line[i:i+2] == '//':
+                break  # Rest of line is comment
+            
+            # Handle string literals (single quotes in KQL)
+            if char == "'" and (i == 0 or line[i-1] != '\\'):
+                in_string = not in_string
+            
+            # Only count brackets if not in string
+            if not in_string:
+                if char == '(':
+                    paren_count += 1
+                elif char == ')':
+                    paren_count -= 1
+                    if paren_count < 0:
+                        warnings.append(f"Line {line_num}: Unmatched closing parenthesis ')'")
+                elif char == '[':
+                    bracket_count += 1
+                elif char == ']':
+                    bracket_count -= 1
+                    if bracket_count < 0:
+                        warnings.append(f"Line {line_num}: Unmatched closing bracket ']'")
+                elif char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count < 0:
+                        warnings.append(f"Line {line_num}: Unmatched closing brace '}}'")
+            
+            i += 1
+    
+    # Check for unclosed strings
+    if in_string:
+        warnings.append(f"{filename}: Unclosed string literal (unmatched single quote)")
+    
+    # Check for unmatched brackets at end of file
+    if paren_count > 0:
+        warnings.append(f"{filename}: {paren_count} unclosed parenthesis(es) '('")
+    elif paren_count < 0:
+        warnings.append(f"{filename}: {abs(paren_count)} extra closing parenthesis(es) ')'")
+    
+    if bracket_count > 0:
+        warnings.append(f"{filename}: {bracket_count} unclosed bracket(s) '['")
+    elif bracket_count < 0:
+        warnings.append(f"{filename}: {abs(bracket_count)} extra closing bracket(s) ']'")
+    
+    if brace_count > 0:
+        warnings.append(f"{filename}: {brace_count} unclosed brace(s) '{{'")
+    elif brace_count < 0:
+        warnings.append(f"{filename}: {abs(brace_count)} extra closing brace(s) '}}'")
+    
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # KQL Command Execution
 # ---------------------------------------------------------------------------
+def _classify_kql_command(cmd: str) -> str:
+    """Classify KQL command as 'critical', 'important', or 'optional'."""
+    cmd_lower = cmd.lower().strip()
+    
+    # Critical: table/function creation, data mapping
+    if any(keyword in cmd_lower for keyword in [
+        ".create table",
+        ".create-merge table", 
+        ".create function",
+        ".create-or-alter function",
+        ".create ingestion mapping"
+    ]):
+        return "critical"
+    
+    # Important: reference data, table settings
+    if any(keyword in cmd_lower for keyword in [
+        ".set-or-append",
+        ".set-or-replace",
+        ".alter table"
+    ]):
+        return "important"
+    
+    # Optional: policies, caching
+    if any(keyword in cmd_lower for keyword in [
+        ".alter-merge policy",
+        ".alter policy",
+        ".delete policy"
+    ]):
+        return "optional"
+    
+    return "important"  # Default to important
+
+
 def execute_kql_commands(cluster_uri: str, database: str, kusto_token: str, kql_file: Path) -> None:
-    """Execute KQL control commands from a .kql file against the database."""
+    """Execute KQL control commands from a .kql file against the database.
+    
+    Raises:
+        RuntimeError: If any critical command fails.
+    """
     log.info("Executing KQL commands from %s…", kql_file.name)
 
     content = kql_file.read_text()
+    
+    # Pre-validate KQL syntax (heuristic checks)
+    syntax_warnings = validate_kql_syntax(content, kql_file.name)
+    if syntax_warnings:
+        log.warning("  ⚠️  KQL syntax pre-validation found %d potential issue(s):", len(syntax_warnings))
+        for warning in syntax_warnings:
+            log.warning("     • %s", warning)
+        log.warning("  These are heuristic checks — deployment will continue.")
 
     # Split on lines starting with '.' (control commands) — skip comment-only blocks
     commands: list[str] = []
@@ -271,14 +427,21 @@ def execute_kql_commands(cluster_uri: str, database: str, kusto_token: str, kql_
 
     success = 0
     failed = 0
+    critical_failures = []
+    important_failures = []
+    optional_failures = []
+    
     for i, cmd in enumerate(commands, 1):
         cmd_clean = cmd.strip()
         if not cmd_clean or cmd_clean.startswith("//"):
             continue
 
+        # Classify command severity
+        severity = _classify_kql_command(cmd_clean)
+
         # Log first 80 chars of command
         preview = cmd_clean.replace("\n", " ")[:80]
-        log.info("  [%d/%d] %s…", i, len(commands), preview)
+        log.info("  [%d/%d] [%s] %s…", i, len(commands), severity.upper(), preview)
 
         payload = {
             "db": database,
@@ -297,13 +460,48 @@ def execute_kql_commands(cluster_uri: str, database: str, kusto_token: str, kql_
                     log.warning("    Already exists — skipping.")
                     success += 1
                 else:
+                    error_msg = f"{preview[:60]}... | Error: {str(errors)[:150]}"
                     log.error("    FAILED (%d): %s", resp.status_code, str(errors)[:200])
                     failed += 1
+                    
+                    # Track failure by severity
+                    if severity == "critical":
+                        critical_failures.append(error_msg)
+                    elif severity == "important":
+                        important_failures.append(error_msg)
+                    else:
+                        optional_failures.append(error_msg)
         except Exception as e:
+            error_msg = f"{preview[:60]}... | Exception: {str(e)[:150]}"
             log.error("    Exception: %s", e)
             failed += 1
+            
+            # Track exception by severity
+            if severity == "critical":
+                critical_failures.append(error_msg)
+            elif severity == "important":
+                important_failures.append(error_msg)
+            else:
+                optional_failures.append(error_msg)
 
+    # Summary report
     log.info("  KQL execution complete: %d succeeded, %d failed", success, failed)
+    
+    if critical_failures:
+        log.error("  ❌ CRITICAL FAILURES (%d) — deployment may be incomplete:", len(critical_failures))
+        for failure in critical_failures:
+            log.error("     • %s", failure)
+        raise RuntimeError(f"KQL deployment failed: {len(critical_failures)} critical command(s) failed")
+    
+    if important_failures:
+        log.warning("  ⚠️  IMPORTANT FAILURES (%d) — some features may not work:", len(important_failures))
+        for failure in important_failures:
+            log.warning("     • %s", failure)
+    
+    if optional_failures:
+        log.info("  ℹ️  OPTIONAL FAILURES (%d) — non-critical issues:", len(optional_failures))
+        for failure in optional_failures:
+            log.info("     • %s", failure)
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +559,16 @@ def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]
 
 
 def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any]:
-    """Build a Real-Time Dashboard definition with pages and tiles."""
+    """
+    Build a Real-Time Dashboard definition with all pages and tiles.
+    
+    Implements the complete dashboard specification from dashboard/dashboard-config.md:
+      - Page 1: Operations Overview (4 tiles)
+      - Page 2: Safety & Environment (4 tiles)
+      - Page 3: Equipment Health (4 tiles)
+      - Page 4: Production (4 tiles)
+    Total: 16 tiles across 4 pages
+    """
     # Define data source
     data_source = {
         "id": "ds-mining-ops",
@@ -370,40 +577,354 @@ def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any
         "database": database,
     }
 
-    # Define queries used by tiles
+    # Define queries used by tiles (18 queries total)
     queries = [
-        {"id": "q-status", "text": 'let cutoff = ago(2m);\nEquipmentTelemetry\n| where Timestamp > cutoff and Quality == "good"\n| summarize arg_max(Timestamp, Value, SensorType) by EquipmentId\n| extend Status = case(\n    SensorType == "engine_temp_c" and Value > 105, "Fault",\n    SensorType == "engine_temp_c" and Value < 30, "Idle",\n    SensorType == "belt_speed_m_s" and Value == 0, "Idle",\n    SensorType == "hydraulic_psi" and Value < 500, "Idle",\n    "Running")\n| summarize Count = count() by Status', "dataSourceId": "ds-mining-ops"},
-        {"id": "q-gas", "text": 'EnvironmentalReadings\n| where SensorType in ("co_ppm", "ch4_pct")\n    and Timestamp > ago(2h) and Quality == "good"\n| summarize AvgValue = round(avg(Value), 2)\n  by Zone, SensorType, bin(Timestamp, 1m)\n| order by Timestamp asc', "dataSourceId": "ds-mining-ops"},
-        {"id": "q-alerts", "text": 'let cutoff = ago(15m);\nEnvironmentalReadings\n| where Timestamp > cutoff and Quality == "good"\n| join kind=inner (AlertThresholds) on SensorType\n| where Value > CriticalHigh or Value < CriticalLow\n| project Timestamp, Zone, SensorType, Value, Unit,\n          Threshold = iff(Value > CriticalHigh, strcat("> ", tostring(CriticalHigh)), strcat("< ", tostring(CriticalLow))),\n          Severity = "Critical"\n| order by Timestamp desc\n| take 20', "dataSourceId": "ds-mining-ops"},
-        {"id": "q-tonnage", "text": 'let shift_start = bin(now(), 8h);\nlet shift_target = 5000.0;\nProductionMetrics\n| where SensorType == "load_tonnes" and Timestamp > shift_start and Quality == "good"\n| summarize TotalTonnes = round(sum(Value), 0) by EquipmentType\n| extend Target = shift_target\n| extend PctOfTarget = round(TotalTonnes / Target * 100, 1)', "dataSourceId": "ds-mining-ops"},
-        {"id": "q-vibration", "text": 'let sigma_threshold = 3.0;\nEquipmentTelemetry\n| where SensorType == "vibration_mm_s" and Timestamp > ago(4h) and Quality == "good"\n| summarize AvgValue = avg(Value), StdValue = stdev(Value),\n            MaxValue = max(Value)\n  by EquipmentId, Bin = bin(Timestamp, 1m)\n| extend UpperBound = AvgValue + (sigma_threshold * StdValue)\n| extend IsAnomaly = MaxValue > UpperBound\n| project Bin, EquipmentId, AvgValue = round(AvgValue, 2),\n          MaxValue = round(MaxValue, 2), UpperBound = round(UpperBound, 2), IsAnomaly', "dataSourceId": "ds-mining-ops"},
-        {"id": "q-temp-zones", "text": 'EnvironmentalReadings\n| where SensorType == "ambient_temp_c" and Timestamp > ago(5m) and Quality == "good"\n| summarize AvgTemp = round(avg(Value), 1), MaxTemp = round(max(Value), 1) by Zone\n| extend Status = case(MaxTemp > 35, "CRITICAL", MaxTemp > 32, "WARNING", "NORMAL")\n| order by MaxTemp desc', "dataSourceId": "ds-mining-ops"},
+        # Page 1: Operations Overview
+        {
+            "id": "q-active-equipment",
+            "text": '''let cutoff = ago(2m);
+EquipmentTelemetry
+| where Timestamp > cutoff and Quality == "good"
+| summarize arg_max(Timestamp, Value, SensorType) by EquipmentId
+| extend Status = case(
+    SensorType == "engine_temp_c" and Value > 105, "Fault",
+    SensorType == "engine_temp_c" and Value < 30,  "Idle",
+    SensorType == "belt_speed_m_s" and Value == 0,  "Idle",
+    SensorType == "hydraulic_psi" and Value < 500,  "Idle",
+    "Running")
+| summarize Count = count() by Status''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-shift-tonnage",
+            "text": '''let shift_start = bin(now(), 8h);
+let shift_target = 5000.0;
+ProductionMetrics
+| where SensorType == "load_tonnes" and Timestamp > shift_start and Quality == "good"
+| summarize TotalTonnes = round(sum(Value), 0) by EquipmentType
+| extend Target = shift_target
+| extend PctOfTarget = round(TotalTonnes / Target * 100, 1)''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-equipment-map",
+            "text": '''let cutoff = ago(5m);
+EquipmentTelemetry
+| where Timestamp > cutoff and Quality == "good"
+| summarize arg_max(Timestamp, *) by EquipmentId
+| join kind=leftouter (EquipmentRegistry | project EquipmentId, Make, Model) on EquipmentId
+| project EquipmentId, EquipmentType, Latitude, Longitude, Zone, Make, Model, Value, SensorType''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-active-alerts",
+            "text": '''let cutoff = ago(15m);
+EnvironmentalReadings
+| where Timestamp > cutoff and Quality == "good"
+| join kind=inner (AlertThresholds) on SensorType
+| where Value > CriticalHigh or Value < CriticalLow
+| project Timestamp, Zone, SensorType, Value, Unit,
+          Threshold = iff(Value > CriticalHigh, strcat("> ", tostring(CriticalHigh)),
+                                                  strcat("< ", tostring(CriticalLow))),
+          Severity = "Critical"
+| union (
+    EquipmentTelemetry
+    | where Timestamp > cutoff and Quality == "good"
+    | where (SensorType == "hydraulic_psi" and Value < 1500)
+         or (SensorType == "engine_temp_c" and Value > 105)
+    | project Timestamp, Zone, SensorType, Value,
+              Unit = iff(SensorType == "hydraulic_psi", "PSI", "°C"),
+              Threshold = iff(SensorType == "hydraulic_psi", "< 1500", "> 105"),
+              Severity = "Critical"
+)
+| order by Timestamp desc
+| take 20''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        
+        # Page 2: Safety & Environment
+        {
+            "id": "q-gas-levels",
+            "text": '''EnvironmentalReadings
+| where SensorType in ("co_ppm", "ch4_pct")
+    and Timestamp > ago(2h) and Quality == "good"
+| summarize AvgValue = round(avg(Value), 2)
+  by Zone, SensorType, bin(Timestamp, 1m)
+| order by Timestamp asc''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-temp-heatmap",
+            "text": '''EnvironmentalReadings
+| where SensorType == "ambient_temp_c" and Timestamp > ago(5m) and Quality == "good"
+| summarize AvgTemp = round(avg(Value), 1), MaxTemp = round(max(Value), 1) by Zone
+| extend Status = case(MaxTemp > 35, "CRITICAL", MaxTemp > 32, "WARNING", "NORMAL")
+| order by MaxTemp desc''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-threshold-breaches",
+            "text": '''EnvironmentalReadings
+| where Timestamp > ago(24h) and Quality == "good"
+| join kind=inner (AlertThresholds) on SensorType
+| where Value > CriticalHigh or Value < CriticalLow
+| project Timestamp, Zone, SensorType, Value, Unit,
+          Threshold = iff(Value > CriticalHigh, CriticalHigh, CriticalLow),
+          Direction = iff(Value > CriticalHigh, "ABOVE", "BELOW")
+| order by Timestamp desc
+| take 50''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-safety-incidents",
+            "text": '''SafetyIncidents
+| order by Timestamp desc
+| project Timestamp, Zone, Severity, Description, EquipmentId
+| take 20''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        
+        # Page 3: Equipment Health
+        {
+            "id": "q-vibration-anomaly-trend",
+            "text": '''let sigma_threshold = 3.0;
+EquipmentTelemetry
+| where SensorType == "vibration_mm_s" and Timestamp > ago(4h) and Quality == "good"
+| summarize AvgValue = avg(Value), StdValue = stdev(Value),
+            MaxValue = max(Value), MinValue = min(Value)
+  by EquipmentId, Bin = bin(Timestamp, 1m)
+| extend UpperBound = AvgValue + (sigma_threshold * StdValue)
+| extend IsAnomaly = MaxValue > UpperBound
+| project Bin, EquipmentId, AvgValue = round(AvgValue, 2),
+          MaxValue = round(MaxValue, 2), UpperBound = round(UpperBound, 2), IsAnomaly''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-drill-hydraulic",
+            "text": '''EquipmentTelemetry
+| where SensorType == "hydraulic_psi" and EquipmentType == "drill"
+    and Timestamp > ago(1h) and Quality == "good"
+| summarize AvgPressure = round(avg(Value), 0) by EquipmentId, bin(Timestamp, 30s)
+| order by Timestamp asc''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-equipment-health-scores",
+            "text": '''EquipmentHealthScores''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-equipment-utilisation",
+            "text": '''let report_day = startofday(ago(1d));
+EquipmentTelemetry
+| where Timestamp between (report_day .. (report_day + 1d)) and Quality == "good"
+| summarize ActiveMinutes = dcount(bin(Timestamp, 1m)) by EquipmentId, EquipmentType
+| extend UtilisationPct = round(ActiveMinutes / 1440.0 * 100, 1)
+| order by UtilisationPct desc''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        
+        # Page 4: Production
+        {
+            "id": "q-conveyor-throughput",
+            "text": '''ProductionMetrics
+| where SensorType in ("belt_load_kg_m", "belt_speed_m_s")
+    and Timestamp > ago(7d) and Quality == "good"
+| summarize AvgValue = round(avg(Value), 2)
+  by EquipmentId, SensorType, bin(Timestamp, 1m)
+| order by Timestamp asc''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-truck-cycle-times",
+            "text": '''ProductionMetrics
+| where SensorType == "cycle_state" and EquipmentType == "haul_truck"
+    and Timestamp > ago(24h) and Quality == "good"
+| extend CyclePhase = case(
+    Value == 1, "Loading", Value == 2, "Travel-Loaded",
+    Value == 3, "Dumping", Value == 4, "Travel-Empty", "Unknown")
+| where CyclePhase != "Unknown"
+| summarize PhaseDuration_min = round(
+    datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0, 1)
+  by EquipmentId, CyclePhase, bin(Timestamp, 1h)
+| summarize AvgDuration_min = round(avg(PhaseDuration_min), 1)
+  by EquipmentId, CyclePhase''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-route-efficiency",
+            "text": '''RouteEfficiency''',
+            "dataSourceId": "ds-mining-ops"
+        },
+        {
+            "id": "q-production-7d",
+            "text": '''ProductionMetrics
+| where SensorType == "load_tonnes" and Timestamp > ago(7d) and Quality == "good"
+| summarize DailyTonnes = round(sum(Value), 0) by Day = startofday(Timestamp)
+| order by Day asc''',
+            "dataSourceId": "ds-mining-ops"
+        },
     ]
 
-    # Define pages and tiles
+    # Define pages and tiles (18 tiles across 4 pages)
     pages = [
+        # Page 1: Operations Overview
         {
             "id": "page-ops",
             "name": "Operations Overview",
             "tiles": [
-                {"id": "tile-status", "title": "Equipment Status", "queryId": "q-status", "visualType": "stat"},
-                {"id": "tile-tonnage", "title": "Shift Tonnage vs Target", "queryId": "q-tonnage", "visualType": "bar"},
-                {"id": "tile-alerts", "title": "Active Alerts", "queryId": "q-alerts", "visualType": "table"},
+                {
+                    "id": "tile-active-equipment",
+                    "title": "Active Equipment Count",
+                    "queryId": "q-active-equipment",
+                    "visualType": "stat",
+                    "layout": {"x": 0, "y": 0, "width": 4, "height": 3},
+                    "autoRefresh": 30
+                },
+                {
+                    "id": "tile-shift-tonnage",
+                    "title": "Shift Tonnage vs Target",
+                    "queryId": "q-shift-tonnage",
+                    "visualType": "bar",
+                    "layout": {"x": 4, "y": 0, "width": 6, "height": 3},
+                    "autoRefresh": 60
+                },
+                {
+                    "id": "tile-equipment-map",
+                    "title": "Equipment Status Map",
+                    "queryId": "q-equipment-map",
+                    "visualType": "map",
+                    "layout": {"x": 0, "y": 3, "width": 6, "height": 4},
+                    "autoRefresh": 30
+                },
+                {
+                    "id": "tile-active-alerts",
+                    "title": "Active Alerts",
+                    "queryId": "q-active-alerts",
+                    "visualType": "table",
+                    "layout": {"x": 6, "y": 3, "width": 6, "height": 4},
+                    "autoRefresh": 15
+                },
             ],
         },
+        
+        # Page 2: Safety & Environment
         {
             "id": "page-safety",
             "name": "Safety & Environment",
             "tiles": [
-                {"id": "tile-gas", "title": "Gas Levels by Zone", "queryId": "q-gas", "visualType": "line"},
-                {"id": "tile-temp", "title": "Zone Temperatures", "queryId": "q-temp-zones", "visualType": "table"},
+                {
+                    "id": "tile-gas-levels",
+                    "title": "Gas Levels by Zone",
+                    "queryId": "q-gas-levels",
+                    "visualType": "line",
+                    "layout": {"x": 0, "y": 0, "width": 8, "height": 4},
+                    "autoRefresh": 15
+                },
+                {
+                    "id": "tile-temp-heatmap",
+                    "title": "Temperature Heat Map",
+                    "queryId": "q-temp-heatmap",
+                    "visualType": "table",
+                    "layout": {"x": 8, "y": 0, "width": 4, "height": 4},
+                    "autoRefresh": 60
+                },
+                {
+                    "id": "tile-threshold-breaches",
+                    "title": "Threshold Breaches 24h",
+                    "queryId": "q-threshold-breaches",
+                    "visualType": "table",
+                    "layout": {"x": 0, "y": 4, "width": 6, "height": 4},
+                    "autoRefresh": 30
+                },
+                {
+                    "id": "tile-safety-incidents",
+                    "title": "Safety Incident Timeline",
+                    "queryId": "q-safety-incidents",
+                    "visualType": "table",
+                    "layout": {"x": 6, "y": 4, "width": 6, "height": 4},
+                    "autoRefresh": 300
+                },
             ],
         },
+        
+        # Page 3: Equipment Health
         {
             "id": "page-equipment",
             "name": "Equipment Health",
             "tiles": [
-                {"id": "tile-vibration", "title": "Vibration Anomalies", "queryId": "q-vibration", "visualType": "scatter"},
+                {
+                    "id": "tile-vibration-anomaly",
+                    "title": "Vibration Anomaly Trend",
+                    "queryId": "q-vibration-anomaly-trend",
+                    "visualType": "scatter",
+                    "layout": {"x": 0, "y": 0, "width": 6, "height": 4},
+                    "autoRefresh": 30
+                },
+                {
+                    "id": "tile-drill-hydraulic",
+                    "title": "Drill Hydraulic Pressure",
+                    "queryId": "q-drill-hydraulic",
+                    "visualType": "line",
+                    "layout": {"x": 6, "y": 0, "width": 6, "height": 4},
+                    "autoRefresh": 30
+                },
+                {
+                    "id": "tile-health-scores",
+                    "title": "Equipment Health Scores",
+                    "queryId": "q-equipment-health-scores",
+                    "visualType": "table",
+                    "layout": {"x": 0, "y": 4, "width": 6, "height": 4},
+                    "autoRefresh": 14400
+                },
+                {
+                    "id": "tile-utilisation",
+                    "title": "Equipment Utilisation",
+                    "queryId": "q-equipment-utilisation",
+                    "visualType": "bar",
+                    "layout": {"x": 6, "y": 4, "width": 6, "height": 4},
+                    "autoRefresh": 300
+                },
+            ],
+        },
+        
+        # Page 4: Production
+        {
+            "id": "page-production",
+            "name": "Production",
+            "tiles": [
+                {
+                    "id": "tile-conveyor-throughput",
+                    "title": "Conveyor Throughput Trend",
+                    "queryId": "q-conveyor-throughput",
+                    "visualType": "area",
+                    "layout": {"x": 0, "y": 0, "width": 8, "height": 4},
+                    "autoRefresh": 60
+                },
+                {
+                    "id": "tile-truck-cycle-times",
+                    "title": "Haul Truck Cycle Times",
+                    "queryId": "q-truck-cycle-times",
+                    "visualType": "bar",
+                    "layout": {"x": 8, "y": 0, "width": 4, "height": 4},
+                    "autoRefresh": 300
+                },
+                {
+                    "id": "tile-route-efficiency",
+                    "title": "Route Efficiency",
+                    "queryId": "q-route-efficiency",
+                    "visualType": "table",
+                    "layout": {"x": 0, "y": 4, "width": 6, "height": 4},
+                    "autoRefresh": 300
+                },
+                {
+                    "id": "tile-production-7d",
+                    "title": "7-Day Production Trend",
+                    "queryId": "q-production-7d",
+                    "visualType": "line",
+                    "layout": {"x": 6, "y": 4, "width": 6, "height": 4},
+                    "autoRefresh": 900
+                },
             ],
         },
     ]

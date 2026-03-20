@@ -315,13 +315,35 @@ class EventHubPublisher:
                 count += 1
             except ValueError:
                 # Batch full — send what we have and start a new one
-                self._producer.send_batch(batch)
+                self._send_batch_with_retry(batch)
                 batch = self._producer.create_batch()
                 batch.add(EventData(json.dumps(event)))
                 count += 1
         if count > 0:
-            self._producer.send_batch(batch)
+            self._send_batch_with_retry(batch)
         return count
+
+    def _send_batch_with_retry(self, batch) -> None:
+        """Send batch with exponential backoff retry on transient failures."""
+        max_retries = 3
+        delay = 1.0
+        for attempt in range(max_retries):
+            try:
+                self._producer.send_batch(batch)
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "Event Hub send failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1, max_retries, e, delay
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    logger.error(
+                        "Event Hub send failed after %d attempts: %s", max_retries, e
+                    )
+                    raise
 
     def close(self) -> None:
         self._producer.close()
@@ -367,6 +389,43 @@ ANOMALY_SCENARIOS: dict[str, list[tuple[str, str]]] = {
     ],
     "all": [],  # populated dynamically
 }
+
+
+# ---------------------------------------------------------------------------
+# Config Validation
+# ---------------------------------------------------------------------------
+def _validate_yaml_config(raw: dict) -> list[str]:
+    """Validate YAML config structure and value ranges. Returns list of error messages."""
+    errors = []
+    
+    # Check for required fields when not using console mode
+    if not raw.get("connection_string") and not raw.get("console_mode"):
+        errors.append("Missing 'connection_string' (required unless console_mode: true)")
+    if not raw.get("eventhub_name") and not raw.get("console_mode"):
+        errors.append("Missing 'eventhub_name' (required unless console_mode: true)")
+    
+    # Validate numeric ranges
+    if "interval_sec" in raw:
+        val = raw["interval_sec"]
+        if not isinstance(val, (int, float)) or val <= 0 or val > 3600:
+            errors.append(f"'interval_sec' must be a positive number <= 3600, got: {val}")
+    
+    if "batch_size" in raw:
+        val = raw["batch_size"]
+        if not isinstance(val, int) or val <= 0 or val > 10000:
+            errors.append(f"'batch_size' must be a positive integer <= 10000, got: {val}")
+    
+    if "max_iterations" in raw:
+        val = raw["max_iterations"]
+        if not isinstance(val, int) or val < 0:
+            errors.append(f"'max_iterations' must be a non-negative integer, got: {val}")
+    
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Config Data Class
+# ---------------------------------------------------------------------------
 # "all" scenario combines every other scenario
 for _scenario_targets in list(ANOMALY_SCENARIOS.values()):
     if _scenario_targets:
@@ -399,6 +458,15 @@ def load_config(args: argparse.Namespace) -> SimulatorConfig:
             sys.exit(1)
         with open(args.config) as f:
             raw = yaml.safe_load(f)
+        
+        # Validate YAML config
+        validation_errors = _validate_yaml_config(raw)
+        if validation_errors:
+            logger.error("Config file validation failed:")
+            for err in validation_errors:
+                logger.error("  - %s", err)
+            sys.exit(1)
+        
         config.connection_string = raw.get("connection_string", "")
         config.eventhub_name = raw.get("eventhub_name", "")
         config.interval_sec = raw.get("interval_sec", DEFAULT_INTERVAL_SEC)

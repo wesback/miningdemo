@@ -95,6 +95,27 @@ EquipmentTelemetry
 // ║  to estimate days until maintenance is required per truck.              ║
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 let lookback = 7d;
+// Data sufficiency check: ensure enough data exists for meaningful ML computation
+let data_check = EquipmentTelemetry
+    | where SensorType in ("engine_temp_c", "oil_pressure_kpa", "vibration_mm_s")
+        and EquipmentType == "haul_truck"
+        and Timestamp > ago(lookback)
+        and Quality == "good"
+    | summarize DataPoints = count(),
+                TimeSpan = datetime_diff('day', max(Timestamp), min(Timestamp)),
+                AssetCount = dcount(EquipmentId);
+let has_sufficient_data = toscalar(data_check
+    | project IsSufficient = (DataPoints >= 100 and TimeSpan >= 1));
+// Return warning if insufficient data; otherwise proceed with RUL estimation
+data_check
+| extend Message = iff(has_sufficient_data,
+    "✓ Sufficient data — proceeding with RUL estimation",
+    strcat("⚠ INSUFFICIENT DATA — Only ", DataPoints, " points over ", TimeSpan,
+           " days. Run simulator for longer or reduce lookback window."))
+| project Message, DataPoints, TimeSpan, AssetCount
+| union (
+    // Only compute RUL if data is sufficient
+    iff(has_sufficient_data,
 // Temperature degradation: rising trend = degradation
 let TempTrend = EquipmentTelemetry
     | where SensorType == "engine_temp_c" and EquipmentType == "haul_truck"
@@ -143,6 +164,8 @@ TempTrend
               EstimatedRUL_Days <= 21, "PLAN",
               "ROUTINE")
 | order by EstimatedRUL_Days asc
+    , datatable(Message: string, DataPoints: long, TimeSpan: real, AssetCount: long)[])
+)
 
 
 // ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -209,13 +232,34 @@ EnvironmentalReadings
 // ║  Detects changes in vibration periodicity that indicate belt wear,      ║
 // ║  splice damage, or roller degradation.                                  ║
 // ╚═══════════════════════════════════════════════════════════════════════════╝
+// Data sufficiency check: 7-day lookback requires adequate historical data
+let belt_lookback = 7d;
+let belt_data_check = EquipmentTelemetry
+    | where SensorType == "vibration_mm_s"
+        and EquipmentType == "conveyor"
+        and Timestamp > ago(belt_lookback)
+        and Quality == "good"
+    | summarize DataPoints = count(),
+                TimeSpan = datetime_diff('day', max(Timestamp), min(Timestamp)),
+                ConveyorCount = dcount(EquipmentId);
+let belt_has_data = toscalar(belt_data_check
+    | project IsSufficient = (DataPoints >= 100 and TimeSpan >= 1));
+belt_data_check
+| extend Message = iff(belt_has_data,
+    "✓ Sufficient data — proceeding with belt wear analysis",
+    strcat("⚠ INSUFFICIENT DATA — Only ", DataPoints, " points over ", TimeSpan,
+           " days. Adjust lookback window or run simulator longer."))
+| project Message, DataPoints, TimeSpan, ConveyorCount
+| union (
+    // Only compute belt wear if data is sufficient
+    iff(belt_has_data,
 EquipmentTelemetry
 | where SensorType == "vibration_mm_s"
     and EquipmentType == "conveyor"
-    and Timestamp > ago(7d)
+    and Timestamp > ago(belt_lookback)
     and Quality == "good"
 | make-series VibSeries = avg(Value) default = real(null)
-    on Timestamp from ago(7d) to now() step 1m
+    on Timestamp from ago(belt_lookback) to now() step 1m
     by EquipmentId
 | extend (Periods, PeriodScores) = series_periods_detect(VibSeries, 2.0, 1440.0, 2)
 // Decompose into trend + seasonal + residual
@@ -231,6 +275,8 @@ EquipmentTelemetry
               Slope > 0.001,  "DEGRADING — vibration trending upward",
               Slope < -0.001, "IMPROVING — post-maintenance settling",
               "STABLE")
+    , datatable(Message: string, DataPoints: long, TimeSpan: real, ConveyorCount: long)[])
+)
 
 
 // ╔═══════════════════════════════════════════════════════════════════════════╗

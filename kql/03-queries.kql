@@ -44,9 +44,33 @@ EquipmentTelemetry
 
 // ---------------------------------------------------------------------------
 // US-1.2  Vibration Anomaly Detection
-// Flags readings > 3σ above the rolling 15-minute average per equipment.
 // ---------------------------------------------------------------------------
 // Query: VibrationAnomalies
+//
+// WHAT IT DOES:
+// Identifies equipment exhibiting abnormal vibration levels in the past hour
+// by comparing the most recent reading in each 15-minute window against the
+// window's statistical baseline.
+//
+// ANOMALY DETECTION METHOD:
+// Z-score (standard deviation) approach — flags readings exceeding 3 standard
+// deviations (3σ) above the 15-minute rolling mean. Computes per-equipment
+// statistics (avg, stdev) over 15-minute bins, then filters for latest values
+// beyond the upper control limit (mean + 3σ).
+//
+// OUTPUT:
+// Returns equipment with anomalous vibration, showing:
+//   - LatestValue: Most recent vibration reading (mm/s)
+//   - Avg15m: 15-minute rolling average baseline
+//   - UpperBound: Statistical threshold (mean + 3σ)
+//   - Deviation: How many standard deviations above the mean
+// Sorted by severity (highest deviation first).
+//
+// WHEN TO USE:
+// Real-time monitoring dashboard tile (last 1 hour). Triggers alerts for
+// equipment requiring immediate inspection (bearings, misalignment, imbalance).
+// Sensitive to true anomalies while filtering normal operational variance.
+// ---------------------------------------------------------------------------
 let window = 15m;
 let sigma_threshold = 3.0;
 EquipmentTelemetry

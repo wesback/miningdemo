@@ -41,17 +41,24 @@ dust_mg_m3,0,5.0,0,10.0,mg/m³,Respirable dust concentration (OSHA PEL 5 mg/m³)
 
 // -----------------------------------------------------------------------------
 // Safety Incidents — Sample historical incidents for correlation queries
-// NOTE: These use fixed dates. After deployment, re-run with recent dates
-// or use this dynamic approach in a KQL Queryset:
-//   .set-or-replace SafetyIncidents <|
-//       datatable(IncidentId:string, Timestamp:datetime, Zone:string,
-//                 Severity:string, Description:string, EquipmentId:string) [
-//           "INC-001", ago(1d) + 9h15m, "Zone-A", "Medium", "Conveyor belt slip", "CV-001",
-//           "INC-002", ago(1d) + 14h42m, "Zone-B", "High", "Elevated CO reading", "ES-002",
-//           "INC-003", ago(2d) + 22h30m, "Zone-C", "Low", "High engine temp", "HT-005"
-//       ]
+// NOTE: These use fixed dates (2026-03-10). For fresh demos with recent dates,
+// uncomment the dynamic version below and comment out the fixed version.
 // -----------------------------------------------------------------------------
 .ingest inline into table SafetyIncidents <|
 INC-2026-001,2026-03-10T09:15:00Z,Zone-A,Medium,Conveyor belt slip detected on CV-001; production paused 12 min,CV-001
 INC-2026-002,2026-03-10T14:42:00Z,Zone-B,High,Elevated CO reading triggered zone evacuation; ventilation restored in 8 min,ES-002
 INC-2026-003,2026-03-09T22:30:00Z,Zone-C,Low,Haul truck HT-005 reported high engine temp; returned to workshop,HT-005
+
+// 💡 DYNAMIC VERSION — For fresh demos, uncomment below to get recent incident dates:
+// Comment out the .ingest above, then run this in a KQL Queryset:
+//
+// .set-or-replace SafetyIncidents <|
+//     datatable(IncidentId:string, Timestamp:datetime, Zone:string,
+//               Severity:string, Description:string, EquipmentId:string) [
+//         "INC-001", ago(1d) + 9h15m, "Zone-A", "Medium",
+//             "Conveyor belt slip detected on CV-001; production paused 12 min", "CV-001",
+//         "INC-002", ago(1d) + 14h42m, "Zone-B", "High",
+//             "Elevated CO reading triggered zone evacuation; ventilation restored in 8 min", "ES-002",
+//         "INC-003", ago(2d) + 22h30m, "Zone-C", "Low",
+//             "Haul truck HT-005 reported high engine temp; returned to workshop", "HT-005"
+//     ]
