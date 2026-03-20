@@ -191,7 +191,9 @@ class FabricClient:
                 return op_result
             # Try to find the item by name
             return self.get_item_by_name(item_type, display_name)
-        elif resp.status_code == 409:
+        elif resp.status_code == 409 or (
+            resp.status_code == 400 and "ItemDisplayNameAlreadyInUse" in resp.text
+        ):
             log.warning("  %s '%s' already exists — looking up existing item.", item_type, display_name)
             return self.get_item_by_name(item_type, display_name)
         else:
