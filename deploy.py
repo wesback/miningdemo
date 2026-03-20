@@ -705,7 +705,7 @@ def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]
     }
 
 
-def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any]:
+def build_dashboard_definition(cluster_uri: str, database: str, database_id: str) -> dict[str, Any]:
     """
     Build a Real-Time Dashboard definition with all pages and tiles.
 
@@ -765,8 +765,8 @@ def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any
     # ------------------------------------------------------------------
     data_source = {
         "id":         ds_id,
-        "name":       "MiningOps",
-        "scopeId":    "cluster",
+        "name":       database,
+        "scopeId":    database_id,
         "kind":       "kusto-trident",
         "clusterUri": cluster_uri,
         "database":   database,
@@ -1028,7 +1028,7 @@ ProductionMetrics
 
     tiles = [
         # ── Page 1: Operations Overview ───────────────────────────────
-        tile("active-equipment",   "Active Equipment Count",      "ops",        "stat",    0,  0, 10, 7),
+        tile("active-equipment",   "Active Equipment Count",      "ops",        "multistat", 0,  0, 10, 7),
         tile("shift-tonnage",      "Shift Tonnage vs Target",     "ops",        "bar",    10,  0, 10, 7),
         tile("equipment-map",      "Equipment Status Map",        "ops",        "map",     0,  7, 10, 8),
         tile("active-alerts",      "Active Alerts",               "ops",        "table",  10,  7, 10, 8),
@@ -1162,7 +1162,7 @@ def deploy(args: argparse.Namespace) -> None:
     # Step 6: Create Real-Time Dashboard
     # -----------------------------------------------------------------------
     if query_uri:
-        dashboard_payload = build_dashboard_definition(query_uri, DATABASE_NAME)
+        dashboard_payload = build_dashboard_definition(query_uri, DATABASE_NAME, database_id)
         client.create_item("kqlDashboards", DASHBOARD_NAME, dashboard_payload)
 
     # -----------------------------------------------------------------------
