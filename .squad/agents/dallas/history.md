@@ -9,6 +9,24 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-03-20 — Fabric REST API LRO Pattern (Full Correct Flow)
+- **Pattern:** After polling `GET {location}` and receiving `status == "Succeeded"`, the status body does NOT contain the item `id`. Must call `GET {location}/result` to get the full item body `{id, displayName, type, workspaceId, ...}`.
+- **Fallback:** If `/result` fails or lacks `id`, fall back to `get_item_by_name()` which searches the list endpoint.
+- **Retry-After:** Must re-read from each poll response, not just the initial 202.
+- **Terminal statuses:** `Running` / `NotStarted` → keep polling. `Succeeded`, `Failed`, anything else → terminal (stop polling).
+- **Files:** `deploy.py` `_wait_for_operation()` method
+
+### 2026-03-20 — Fabric API Pagination Required for get_item_by_name
+- **Pattern:** All Fabric list endpoints (`GET /workspaces/{id}/{itemType}`) paginate with `continuationUri` in the response body. A workspace with >100 items of any type requires following `continuationUri` to find items on page 2+.
+- **Implementation:** Loop `while url: resp = GET url; url = data.get("continuationUri")` — use `continuationUri` directly (it's the full URL).
+- **Files:** `deploy.py` `get_item_by_name()` method
+
+### 2026-03-20 — Fabric API Inconsistencies Confirmed in Production
+- **HTTP 200 on creates:** Some item types or API versions return 200 instead of 201. Handle both with `if resp.status_code in (200, 201)`.
+- **Trailing slash on cluster_uri:** Fabric's `queryServiceUri` property may include a trailing slash. Must `.rstrip("/")` before constructing Kusto mgmt endpoint or auth scope.
+- **Poll exceptions:** Network errors during polling should be caught and retried, not propagated.
+- **Files:** `deploy.py` `create_item()`, `get_kusto_token()`, `execute_kql_commands()`
+
 ### 2026-03-20 — Dashboard Query Standardization
 - **Pattern:** Dashboard tile configurations in `dashboard/dashboard-config.md` now explicitly reference named queries from `kql/03-queries.kql` using consistent backtick-quoted format
 - **Files:** All query references standardized — inline KQL queries included for ad-hoc tiles, named queries referenced by name (e.g., `EquipmentHealthScores`, `RouteEfficiency`)

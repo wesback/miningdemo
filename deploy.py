@@ -108,6 +108,7 @@ def get_token(args: argparse.Namespace) -> str:
 
 def get_kusto_token(args: argparse.Namespace, cluster_uri: str) -> str:
     """Acquire a bearer token for KQL command execution."""
+    cluster_uri = cluster_uri.rstrip("/")
     scope = f"{cluster_uri}/.default"
     if args.client_id and args.client_secret and args.tenant_id:
         credential = ClientSecretCredential(
@@ -143,32 +144,89 @@ class FabricClient:
         return f"{FABRIC_API_BASE}/workspaces/{self.workspace_id}/{path}"
 
     def _wait_for_operation(self, response: requests.Response, item_type: str) -> dict[str, Any] | None:
-        """Handle long-running operations (202 Accepted)."""
-        if response.status_code == 202:
-            location = response.headers.get("Location")
-            retry_after = int(response.headers.get("Retry-After", "5"))
-            if not location:
-                log.warning("  202 received but no Location header for %s", item_type)
-                return None
-            log.info("  Waiting for %s provisioning…", item_type)
-            for _ in range(60):  # max 5 minutes
-                time.sleep(retry_after)
-                poll = self.session.get(location)
-                if poll.status_code == 200:
-                    body = poll.json()
-                    status = body.get("status", "")
-                    if status in ("Succeeded", "succeeded"):
-                        log.info("  %s provisioning completed.", item_type)
-                        return body
-                    elif status in ("Failed", "failed"):
-                        log.error("  %s provisioning FAILED: %s", item_type, body)
-                        return None
-                elif poll.status_code == 202:
-                    continue
-                else:
-                    log.warning("  Unexpected poll status %d", poll.status_code)
-            log.error("  Timed out waiting for %s", item_type)
+        """Handle long-running operations (202 Accepted).
+
+        Polls the operation status URL until the operation reaches a terminal
+        state, then fetches the result via the /result endpoint so callers
+        receive the created-item body (with 'id') rather than the bare status
+        object.
+
+        Terminal statuses recognised: Succeeded, Failed, Cancelled, Undefined.
+        Any status that is not Running / NotStarted is treated as terminal.
+        """
+        if response.status_code != 202:
             return None
+
+        location = response.headers.get("Location")
+        if not location:
+            log.warning("  202 received but no Location header for %s", item_type)
+            return None
+
+        # Honour the Retry-After from the initial response; re-read on each poll.
+        retry_after = int(response.headers.get("Retry-After", "5"))
+
+        log.info("  Waiting for %s provisioning…", item_type)
+        for _ in range(60):  # max 5 minutes (60 × retry_after seconds)
+            time.sleep(retry_after)
+
+            try:
+                poll = self.session.get(location)
+            except Exception as exc:
+                log.warning("  Poll request failed (%s) — retrying…", exc)
+                continue
+
+            if poll.status_code == 200:
+                body = poll.json()
+                status = body.get("status", "")
+
+                if status.lower() == "succeeded":
+                    log.info("  %s provisioning completed.", item_type)
+                    # Fetch the actual created-item from the /result endpoint.
+                    # This gives us the item body with 'id', which is more
+                    # reliable than the bare status object.
+                    try:
+                        result_resp = self.session.get(f"{location}/result")
+                        if result_resp.status_code == 200:
+                            result_body = result_resp.json()
+                            if result_body.get("id"):
+                                return result_body
+                    except Exception as exc:
+                        log.debug("  Could not fetch /result for %s: %s", item_type, exc)
+                    # Fall back to returning the status body; create_item() will
+                    # call get_item_by_name() when 'id' is absent.
+                    return body
+
+                elif status.lower() == "failed":
+                    error = body.get("error", {})
+                    log.error(
+                        "  %s provisioning FAILED: code=%s msg=%s",
+                        item_type,
+                        error.get("errorCode", error.get("code", "unknown")),
+                        error.get("message", str(body))[:300],
+                    )
+                    return None
+
+                elif status.lower() in ("running", "notstarted", ""):
+                    # Operation still in progress — re-read Retry-After and continue.
+                    retry_after = int(poll.headers.get("Retry-After", str(retry_after)))
+                    continue
+
+                else:
+                    # Unexpected terminal status (e.g. Cancelled, Undefined).
+                    log.warning("  %s: unexpected operation status '%s' — aborting poll.", item_type, status)
+                    return None
+
+            elif poll.status_code == 202:
+                # Still accepted — update retry interval and keep polling.
+                retry_after = int(poll.headers.get("Retry-After", str(retry_after)))
+                continue
+
+            else:
+                log.warning("  Unexpected poll HTTP status %d for %s", poll.status_code, item_type)
+                # Don't bail immediately — one bad response may be transient.
+                retry_after = int(poll.headers.get("Retry-After", str(retry_after)))
+
+        log.error("  Timed out waiting for %s", item_type)
         return None
 
     def create_item(self, item_type: str, display_name: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -181,13 +239,13 @@ class FabricClient:
         log.info("Creating %s: '%s'…", item_type, display_name)
         resp = self.session.post(url, json=body)
 
-        if resp.status_code == 201:
+        if resp.status_code in (200, 201):
             result = resp.json()
             log.info("  Created %s: id=%s", item_type, result.get("id", "?"))
             return result
         elif resp.status_code == 202:
             op_result = self._wait_for_operation(resp, item_type)
-            if op_result and "id" in op_result:
+            if op_result and op_result.get("id"):
                 return op_result
             # Operation succeeded but response lacks item details — look up by name
             return self.get_item_by_name(item_type, display_name)
@@ -201,14 +259,22 @@ class FabricClient:
             return None
 
     def get_item_by_name(self, item_type: str, display_name: str) -> dict[str, Any] | None:
-        """Find an existing item by display name."""
-        url = self._url(item_type)
-        resp = self.session.get(url)
-        if resp.status_code == 200:
-            for item in resp.json().get("value", []):
+        """Find an existing item by display name, following pagination."""
+        url: str | None = self._url(item_type)
+        page = 0
+        while url:
+            page += 1
+            resp = self.session.get(url)
+            if resp.status_code != 200:
+                log.warning("  Could not list %s (HTTP %d)", item_type, resp.status_code)
+                break
+            data = resp.json()
+            for item in data.get("value", []):
                 if item.get("displayName") == display_name:
-                    log.info("  Found existing %s: id=%s", item_type, item["id"])
+                    log.info("  Found existing %s: id=%s", item_type, item.get("id", "?"))
                     return item
+            # Follow continuationUri for next page; fall back to None to stop.
+            url = data.get("continuationUri") or None
         return None
 
     def get_item_definition(self, item_type: str, item_id: str) -> dict[str, Any] | None:
@@ -378,7 +444,9 @@ def execute_kql_commands(cluster_uri: str, database: str, kusto_token: str, kql_
     log.info("Executing KQL commands from %s…", kql_file.name)
 
     content = kql_file.read_text()
-    
+    # Normalise cluster URI — a stray trailing slash breaks the mgmt endpoint URL.
+    cluster_uri = cluster_uri.rstrip("/")
+
     # Pre-validate KQL syntax (heuristic checks)
     syntax_warnings = validate_kql_syntax(content, kql_file.name)
     if syntax_warnings:
