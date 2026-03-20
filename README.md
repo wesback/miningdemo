@@ -10,6 +10,7 @@ End-to-end demo of **Microsoft Fabric Real-Time Intelligence** for a mining oper
 miningdemo/
 ├── README.md                          ← You are here
 ├── deploy.py                          ← Automated Fabric deployment script
+├── get-docker.sh                      ← [DEPRECATED] Docker install script (not required)
 ├── docs/
 │   ├── user-stories.md                ← Phase 1: User stories by persona
 │   └── architecture.md                ← Phase 2: Architecture design
@@ -21,10 +22,12 @@ miningdemo/
 ├── dashboard/
 │   └── dashboard-config.md            ← Tile layout and backing queries per visual
 ├── activator/
-│   └── alert-rules.md                 ← Data Activator alert rule definitions
+│   ├── alert-rules.md                 ← Data Activator alert rule definitions
+│   └── ingest_history.py              ← Historical data ingestion (single CSV)
 └── simulator/
     ├── simulator.py                   ← Live streaming data simulator
-    ├── generate_history.py            ← 31-day historical data generator
+    ├── deploy_history.py              ← Automated pipeline: generate + ingest historical data
+    ├── generate_history.py            ← 31-day historical data generator (CSV output)
     ├── requirements.txt               ← Python dependencies
     └── config.sample.yaml             ← Sample configuration
 ```
@@ -39,6 +42,7 @@ miningdemo/
 | **Python** | 3.10+ |
 | **Azure Event Hub** | Namespace + Event Hub (or use Fabric Eventstream custom endpoint) |
 | **azure-eventhub SDK** | `pip install azure-eventhub` |
+| **Service Principal** | Required for CI/CD — see [CI/CD Setup Guide](docs/CICD_SETUP.md) |
 
 ### Fabric Items You Will Create
 
@@ -168,6 +172,39 @@ This creates:
 
 **To ingest into your KQL database:**
 
+#### Option A — Automated Python Script (Recommended)
+
+```bash
+cd activator/
+
+# Install dependencies
+pip install azure-identity azure-kusto-data azure-kusto-ingest
+
+# Ingest SensorReadings (interactive auth)
+python ingest_history.py \
+  --csv ../simulator/historical_data/SensorReadings.csv \
+  --cluster https://<your-cluster>.kusto.fabric.microsoft.com \
+  --database MiningOps \
+  --table SensorReadings
+
+# Ingest SafetyIncidents
+python ingest_history.py \
+  --csv ../simulator/historical_data/SafetyIncidents.csv \
+  --cluster https://<your-cluster>.kusto.fabric.microsoft.com \
+  --database MiningOps \
+  --table SafetyIncidents
+
+# For service principal auth (CI/CD):
+python ingest_history.py \
+  --csv ../simulator/historical_data/SensorReadings.csv \
+  --cluster https://<cluster>.kusto.fabric.microsoft.com \
+  --database MiningOps \
+  --table SensorReadings \
+  --tenant-id <GUID> --client-id <GUID> --client-secret <SECRET>
+```
+
+#### Option B — Manual Upload via KQL Queryset
+
 1. Upload the CSVs to a **Fabric Lakehouse** (drag & drop into the Files section) or to **Azure Blob Storage**.
 
 2. Run in a KQL Queryset:
@@ -223,6 +260,14 @@ This creates:
    - **Truck Health Critical** (Warning) → Teams
    - **Conveyor Stoppage** (Warning) → Teams
 5. Activate each trigger.
+
+---
+
+### CI/CD Setup
+
+For automated deployment via GitHub Actions (including service principal setup, GitHub Secrets configuration, and workflow triggers), see the **[CI/CD Setup Guide](docs/CICD_SETUP.md)**.
+
+The CI/CD pipeline deploys all Fabric resources on push to `main` or via manual trigger, with optional historical data generation.
 
 ---
 

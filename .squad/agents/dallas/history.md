@@ -63,3 +63,27 @@
 - **Benefit:** Ingestion verification now correctly detects failed ingestions even when table already has historical rows; better observability with row delta reporting
 - **Pattern:** Baseline-then-compare pattern applicable to any incremental operation verification (table updates, queue processing, batch jobs)
 - **Key Files:** `deploy.py` (docstring fix), `activator/ingest_history.py` (baseline verification logic)
+
+### 2026-03-20 — Comprehensive CI/CD Setup Documentation
+- **Created:** `docs/CICD_SETUP.md` — Comprehensive guide for automated deployment via GitHub Actions
+- **Scope:** Covers full setup lifecycle from Azure AD app registration through successful deployment
+- **Key Sections:**
+  1. **Prerequisites:** Azure subscription, Fabric workspace, permissions needed
+  2. **Service Principal Creation:** Azure Portal and Azure CLI methods with API permissions setup
+  3. **Fabric IDs Discovery:** FABRIC_WORKSPACE_ID, FABRIC_CLUSTER_URI, tenant/client IDs
+  4. **GitHub Secrets Configuration:** 5 secrets required with exact names and validation checklist
+  5. **Deployment Options:** CI/CD push triggers, workflow_dispatch with historical data, local CLI
+  6. **Post-Deployment Steps:** Eventstream wiring, Data Activator setup (both UI-only, not REST API)
+  7. **Troubleshooting:** Table of 15+ common issues with solutions (401/403 errors, secret problems, URI formats)
+- **Workflow Details:**
+  - **Secrets Used:** AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, FABRIC_WORKSPACE_ID, FABRIC_CLUSTER_URI
+  - **FABRIC_CLUSTER_URI:** Only required for historical-data job (workflow_dispatch with include_historical=true)
+  - **Main Deploy Job:** Validates secrets, runs deploy.py, creates all 5 Fabric items
+  - **Historical-Data Job:** Conditional on workflow_dispatch + include_historical flag, generates CSVs then ingests via deploy_history.py
+  - **Triggers:** Auto on push to main (paths: deploy.py, kql/**, dashboard/**, simulator/**), manual via workflow_dispatch
+- **Fabric Items Deployed:** Eventhouse (MiningRTI), KQL Database (MiningOps), Eventstream (MiningSensorStream), KQL Queryset (MiningOps-Queries), Dashboard (Mining Operations)
+- **README Integration:** Added CI/CD Setup section after "Option B — Manual" and before "Demo Scenarios", plus table row in Prerequisites linking to guide
+- **Format:** Professional markdown with code blocks, callout boxes (Tip/Warning), tables, numbered steps, troubleshooting matrix
+- **Audience:** First-time setup users — clear enough for non-experts, detailed enough for CI/CD best practices
+- **Key Files:** `docs/CICD_SETUP.md` (new), `README.md` (updated with link + prereq row)
+

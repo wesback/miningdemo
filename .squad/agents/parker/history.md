@@ -127,3 +127,8 @@
 - Lambert: Added pre-flight validation for historical data secrets
 
 **Related decisions:** See `.squad/decisions/inbox/parker-workflow-fix.md` for team review
+
+### 2026-03-20: Dallas creates comprehensive CI/CD setup guide
+**Context:** Dallas created `docs/CICD_SETUP.md` to address user onboarding gap around service principal configuration and secret setup for GitHub Actions CI/CD.
+**Impact on your work:** Your workflow (deploy-fabric.yml) is now fully documented in a dedicated guide with troubleshooting section covering 15+ common errors. Users can self-serve auth failures and secret configuration without support. Guide includes exact secret names, workspace access requirements, and post-deployment reality checks (manual Eventstream wiring).
+**Cross-reference:** If workflow changes (new secrets, new jobs, trigger adjustments), ping Dallas to update guide sections 2-4. Otherwise, guide is decoupled and requires no changes from Parker unless workflow internals change significantly.

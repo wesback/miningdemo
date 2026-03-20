@@ -2,6 +2,19 @@
 
 How to decide who handles what.
 
+## Model Assignment
+
+| Agent | Model | Rationale |
+|-------|-------|-----------|
+| Ripley 🏗️ (Lead) | `claude-opus-4.6` | Architecture, code review, and complex reasoning need Opus |
+| Parker 🔧 (Python Dev) | `claude-sonnet-4.6` | Coding tasks — Sonnet 4.6 for speed + quality |
+| Ash 📊 (Data Engineer) | `claude-sonnet-4.6` | Coding tasks — Sonnet 4.6 for speed + quality |
+| Dallas 🔬 (Fabric Expert) | `claude-sonnet-4.6` | Coding tasks — Sonnet 4.6 for speed + quality |
+| Lambert 🧪 (Tester) | `claude-sonnet-4.6` | Coding tasks — Sonnet 4.6 for speed + quality |
+| Scribe 📋 (silent) | `claude-sonnet-4.6` | Logging — Sonnet 4.6 is sufficient |
+
+When dispatching agents via the `task` tool, **always set the `model` parameter** per the table above.
+
 ## Routing Table
 
 | Work Type | Route To | Examples |

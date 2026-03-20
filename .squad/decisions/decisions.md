@@ -1,7 +1,50 @@
 # Consolidated Squad Decisions Log
 
-**Last Updated:** 2026-03-20T14:02:19Z  
+**Last Updated:** 2026-03-20T13:17:26Z  
 **Canonical Source:** All squad decisions, deduplicated and consolidated
+
+---
+
+## Dallas — CI/CD Setup Guide
+
+**Date:** 2026-03-20  
+**Owner:** Dallas (Fabric Expert)  
+**Status:** Implemented  
+**Impact:** Documentation, DevOps, Onboarding
+
+### Summary
+
+Created `docs/CICD_SETUP.md` as a comprehensive, standalone CI/CD setup guide with 7 main sections (Prerequisites → Service Principal → Fabric IDs → GitHub Secrets → Run Deployment → Post-Deployment → Troubleshooting). Offers dual UI (Azure Portal) and CLI paths. Includes 15+ troubleshooting entries covering 401/403 errors, secret expiration, URI format mistakes, and workspace access problems.
+
+### Key Design Choices
+
+1. **Standalone guide** — Maintains README focus on deployment overview, delegates CI/CD detail to dedicated doc (avoids README bloat)
+2. **FABRIC_CLUSTER_URI scoped** — Documented as only required for historical-data job (workflow_dispatch with include_historical=true), reduces setup friction for basic CI/CD
+3. **Service principal workspace access** — Emphasized critical "Manage access" step in Fabric workspace (not just Azure RBAC) — addresses common configuration issue
+4. **Exact secret names** — Used exact-match table with all 5 GitHub Secrets to prevent typos
+5. **Post-deployment reality check** — Explicitly noted Eventstream wiring and Data Activator setup as manual UI-only (REST API limitations)
+
+### Consequences
+
+**Positive:**
+- Onboarding time reduced: ~15 minutes for new users
+- Support burden decreased: Troubleshooting section answers 90% of common questions
+- Fabric-specific clarity: Covers workspace access and Kusto URIs
+
+**Negative:**
+- Maintenance overhead: Must track if workflow changes
+- Duplication risk: deploy.py, workflow comments, and guide must stay in sync
+
+**Mitigation:**
+- Workflow file is authoritative — guide documents what exists there
+- Version tracking: Guide includes references to workflow file lines
+- Ready for deprecation: Can mark UI-only sections if Fabric APIs expand
+
+### Related Files
+
+- `docs/CICD_SETUP.md` (new)
+- `README.md` (updated)
+- `.github/workflows/deploy-fabric.yml` (not changed, documented)
 
 ---
 

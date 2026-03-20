@@ -60,3 +60,9 @@
 - All changes backward-compatible; no breaking API changes
 
 **Production Readiness:** Demo approved for demonstration use as-is (Ripley's 2026-03-20 review). Backlog work completes 6 medium-priority improvements; 8 low-priority enhancements remain for future sprints.
+
+### 2026-03-20: Dallas creates comprehensive CI/CD setup guide
+**Context:** Dallas created `docs/CICD_SETUP.md` as standalone guide for users setting up GitHub Actions CI/CD with service principal auth.
+**Impact on your review scope:** Guide documents existing workflow (`deploy-fabric.yml`) structure, secrets, triggers, and post-deployment requirements. Covers 7 sections with dual UI/CLI paths and 15+ troubleshooting entries. Addresses common failures (401/403, secret expiration, URI format, workspace access).
+**For future reviews:** If workflow architecture changes (new jobs, secrets, or trigger patterns), note in review that Dallas's guide should be updated. Guide is decoupled from code review process; Dallas maintains separately based on workflow changes, not on code quality findings.
+**User-facing benefit:** Users can now self-serve authentication failures and secret configuration from guide's troubleshooting section. Reduces support burden for repetitive auth questions.
