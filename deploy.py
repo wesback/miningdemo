@@ -254,7 +254,10 @@ class FabricClient:
             resp.status_code == 400 and "ItemDisplayNameAlreadyInUse" in resp.text
         ):
             log.warning("  %s '%s' already exists — looking up existing item.", item_type, display_name)
-            return self.get_item_by_name(item_type, display_name)
+            existing = self.get_item_by_name(item_type, display_name)
+            if existing and payload and "definition" in payload:
+                self.update_item_definition(item_type, existing["id"], payload)
+            return existing
         else:
             log.error("  Failed to create %s: %d %s", item_type, resp.status_code, resp.text[:500])
             return None
@@ -287,6 +290,22 @@ class FabricClient:
         elif resp.status_code == 202:
             return self._wait_for_operation(resp, f"{item_type} definition")
         return None
+
+    def update_item_definition(self, item_type: str, item_id: str, payload: dict[str, Any]) -> bool:
+        """Update the definition of an existing item (dashboard, queryset, etc.)."""
+        url = self._url(f"{item_type}/{item_id}/updateDefinition")
+        log.info("  Updating %s definition (id=%s)…", item_type, item_id)
+        resp = self.session.post(url, json=payload)
+        if resp.status_code == 200:
+            log.info("  ✓ Definition updated successfully.")
+            return True
+        elif resp.status_code == 202:
+            self._wait_for_operation(resp, f"{item_type} definition update")
+            log.info("  ✓ Definition updated successfully.")
+            return True
+        else:
+            log.error("  Failed to update definition: %d %s", resp.status_code, resp.text[:500])
+            return False
 
 
 # ---------------------------------------------------------------------------
