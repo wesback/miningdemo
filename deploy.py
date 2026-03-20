@@ -1019,9 +1019,11 @@ ProductionMetrics
             "id":         t_id[key],
             "title":      title,
             "pageId":     page_id[pg],
-            "queryRef":   {"kind": "KQL", "queryId": q_id[key]},
+            "queryRef":   {"kind": "query", "queryId": q_id[key]},
             "visualType": visual,
             "layout":     {"x": x, "y": y, "width": w, "height": h},
+            "usedParamVariables": [],
+            "visualOptions": {},
         }
 
     tiles = [
@@ -1050,7 +1052,7 @@ ProductionMetrics
     dashboard_json = {
         "schema_version": "52",
         "title":        "Mining Operations",
-        "autoRefresh":  {"enabled": True, "defaultRefreshRate": "30s"},
+        "autoRefresh":  {"enabled": True, "interval": 30},
         "dataSources":  [data_source],
         "pages":        pages,
         "tiles":        tiles,        # root-level; NOT inside pages
