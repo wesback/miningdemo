@@ -34,6 +34,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -631,28 +632,86 @@ def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]
 def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any]:
     """
     Build a Real-Time Dashboard definition with all pages and tiles.
-    
+
     Implements the complete dashboard specification from dashboard/dashboard-config.md:
       - Page 1: Operations Overview (4 tiles)
       - Page 2: Safety & Environment (4 tiles)
       - Page 3: Equipment Health (4 tiles)
       - Page 4: Production (4 tiles)
     Total: 16 tiles across 4 pages
+
+    All IDs are deterministic RFC 4122 UUIDs (uuid5) so re-deploys never
+    create duplicates.  Tiles live at the ROOT level with a ``pageId``
+    back-reference — NOT nested inside pages.  dataSources.kind is
+    ``kusto-trident`` as required by the Fabric RTD schema.
     """
-    # Define data source
-    data_source = {
-        "id": "ds-mining-ops",
-        "kind": "kusto",
-        "clusterUri": cluster_uri,
-        "database": database,
+    # ------------------------------------------------------------------
+    # Deterministic UUIDs — same inputs always produce the same UUIDs so
+    # re-running deploy does not create duplicate dashboard items.
+    # ------------------------------------------------------------------
+    NS = uuid.NAMESPACE_DNS
+
+    def uid(name: str) -> str:
+        return str(uuid.uuid5(NS, f"mining-rti-{name}"))
+
+    ds_id = uid("datasource")
+
+    page_id = {
+        "ops":        uid("page-ops"),
+        "safety":     uid("page-safety"),
+        "equipment":  uid("page-equipment"),
+        "production": uid("page-production"),
     }
 
-    # Define queries used by tiles (18 queries total)
+    q_id = {
+        "active-equipment":       uid("q-active-equipment"),
+        "shift-tonnage":          uid("q-shift-tonnage"),
+        "equipment-map":          uid("q-equipment-map"),
+        "active-alerts":          uid("q-active-alerts"),
+        "gas-levels":             uid("q-gas-levels"),
+        "temp-heatmap":           uid("q-temp-heatmap"),
+        "threshold-breaches":     uid("q-threshold-breaches"),
+        "safety-incidents":       uid("q-safety-incidents"),
+        "vibration-anomaly":      uid("q-vibration-anomaly"),
+        "drill-hydraulic":        uid("q-drill-hydraulic"),
+        "equipment-health-scores":uid("q-equipment-health-scores"),
+        "equipment-utilisation":  uid("q-equipment-utilisation"),
+        "conveyor-throughput":    uid("q-conveyor-throughput"),
+        "truck-cycle-times":      uid("q-truck-cycle-times"),
+        "route-efficiency":       uid("q-route-efficiency"),
+        "production-7d":          uid("q-production-7d"),
+    }
+
+    t_id = {k: uid(f"tile-{k}") for k in q_id}
+
+    # ------------------------------------------------------------------
+    # Data source — kind MUST be "kusto-trident"; workspace can be "".
+    # ------------------------------------------------------------------
+    data_source = {
+        "id":         ds_id,
+        "name":       "MiningOps",
+        "scopeId":    "cluster",
+        "kind":       "kusto-trident",
+        "clusterUri": cluster_uri,
+        "database":   database,
+        "workspace":  "",
+    }
+
+    # ------------------------------------------------------------------
+    # Queries — every entry MUST include "usedVariables" (even if empty).
+    # ------------------------------------------------------------------
+    def q(key: str, text: str) -> dict[str, Any]:
+        return {
+            "id":            q_id[key],
+            "dataSourceId":  ds_id,
+            "text":          text,
+            "usedVariables": [],
+        }
+
     queries = [
-        # Page 1: Operations Overview
-        {
-            "id": "q-active-equipment",
-            "text": '''let cutoff = ago(2m);
+        # ── Page 1: Operations Overview ───────────────────────────────
+        q("active-equipment", '''\
+let cutoff = ago(2m);
 EquipmentTelemetry
 | where Timestamp > cutoff and Quality == "good"
 | summarize arg_max(Timestamp, Value, SensorType) by EquipmentId
@@ -662,40 +721,34 @@ EquipmentTelemetry
     SensorType == "belt_speed_m_s" and Value == 0,  "Idle",
     SensorType == "hydraulic_psi" and Value < 500,  "Idle",
     "Running")
-| summarize Count = count() by Status''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-shift-tonnage",
-            "text": '''let shift_start = bin(now(), 8h);
+| summarize Count = count() by Status'''),
+
+        q("shift-tonnage", '''\
+let shift_start = bin(now(), 8h);
 let shift_target = 5000.0;
 ProductionMetrics
 | where SensorType == "load_tonnes" and Timestamp > shift_start and Quality == "good"
 | summarize TotalTonnes = round(sum(Value), 0) by EquipmentType
 | extend Target = shift_target
-| extend PctOfTarget = round(TotalTonnes / Target * 100, 1)''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-equipment-map",
-            "text": '''let cutoff = ago(5m);
+| extend PctOfTarget = round(TotalTonnes / Target * 100, 1)'''),
+
+        q("equipment-map", '''\
+let cutoff = ago(5m);
 EquipmentTelemetry
 | where Timestamp > cutoff and Quality == "good"
 | summarize arg_max(Timestamp, *) by EquipmentId
 | join kind=leftouter (EquipmentRegistry | project EquipmentId, Make, Model) on EquipmentId
-| project EquipmentId, EquipmentType, Latitude, Longitude, Zone, Make, Model, Value, SensorType''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-active-alerts",
-            "text": '''let cutoff = ago(15m);
+| project EquipmentId, EquipmentType, Latitude, Longitude, Zone, Make, Model, Value, SensorType'''),
+
+        q("active-alerts", '''\
+let cutoff = ago(15m);
 EnvironmentalReadings
 | where Timestamp > cutoff and Quality == "good"
 | join kind=inner (AlertThresholds) on SensorType
 | where Value > CriticalHigh or Value < CriticalLow
 | project Timestamp, Zone, SensorType, Value, Unit,
           Threshold = iff(Value > CriticalHigh, strcat("> ", tostring(CriticalHigh)),
-                                                  strcat("< ", tostring(CriticalLow))),
+                                                strcat("< ", tostring(CriticalLow))),
           Severity = "Critical"
 | union (
     EquipmentTelemetry
@@ -708,33 +761,26 @@ EnvironmentalReadings
               Severity = "Critical"
 )
 | order by Timestamp desc
-| take 20''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        
-        # Page 2: Safety & Environment
-        {
-            "id": "q-gas-levels",
-            "text": '''EnvironmentalReadings
+| take 20'''),
+
+        # ── Page 2: Safety & Environment ──────────────────────────────
+        q("gas-levels", '''\
+EnvironmentalReadings
 | where SensorType in ("co_ppm", "ch4_pct")
     and Timestamp > ago(2h) and Quality == "good"
 | summarize AvgValue = round(avg(Value), 2)
   by Zone, SensorType, bin(Timestamp, 1m)
-| order by Timestamp asc''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-temp-heatmap",
-            "text": '''EnvironmentalReadings
+| order by Timestamp asc'''),
+
+        q("temp-heatmap", '''\
+EnvironmentalReadings
 | where SensorType == "ambient_temp_c" and Timestamp > ago(5m) and Quality == "good"
 | summarize AvgTemp = round(avg(Value), 1), MaxTemp = round(max(Value), 1) by Zone
 | extend Status = case(MaxTemp > 35, "CRITICAL", MaxTemp > 32, "WARNING", "NORMAL")
-| order by MaxTemp desc''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-threshold-breaches",
-            "text": '''EnvironmentalReadings
+| order by MaxTemp desc'''),
+
+        q("threshold-breaches", '''\
+EnvironmentalReadings
 | where Timestamp > ago(24h) and Quality == "good"
 | join kind=inner (AlertThresholds) on SensorType
 | where Value > CriticalHigh or Value < CriticalLow
@@ -742,22 +788,17 @@ EnvironmentalReadings
           Threshold = iff(Value > CriticalHigh, CriticalHigh, CriticalLow),
           Direction = iff(Value > CriticalHigh, "ABOVE", "BELOW")
 | order by Timestamp desc
-| take 50''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-safety-incidents",
-            "text": '''SafetyIncidents
+| take 50'''),
+
+        q("safety-incidents", '''\
+SafetyIncidents
 | order by Timestamp desc
 | project Timestamp, Zone, Severity, Description, EquipmentId
-| take 20''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        
-        # Page 3: Equipment Health
-        {
-            "id": "q-vibration-anomaly-trend",
-            "text": '''let sigma_threshold = 3.0;
+| take 20'''),
+
+        # ── Page 3: Equipment Health ───────────────────────────────────
+        q("vibration-anomaly", '''\
+let sigma_threshold = 3.0;
 EquipmentTelemetry
 | where SensorType == "vibration_mm_s" and Timestamp > ago(4h) and Quality == "good"
 | summarize AvgValue = avg(Value), StdValue = stdev(Value),
@@ -766,48 +807,36 @@ EquipmentTelemetry
 | extend UpperBound = AvgValue + (sigma_threshold * StdValue)
 | extend IsAnomaly = MaxValue > UpperBound
 | project Bin, EquipmentId, AvgValue = round(AvgValue, 2),
-          MaxValue = round(MaxValue, 2), UpperBound = round(UpperBound, 2), IsAnomaly''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-drill-hydraulic",
-            "text": '''EquipmentTelemetry
+          MaxValue = round(MaxValue, 2), UpperBound = round(UpperBound, 2), IsAnomaly'''),
+
+        q("drill-hydraulic", '''\
+EquipmentTelemetry
 | where SensorType == "hydraulic_psi" and EquipmentType == "drill"
     and Timestamp > ago(1h) and Quality == "good"
 | summarize AvgPressure = round(avg(Value), 0) by EquipmentId, bin(Timestamp, 30s)
-| order by Timestamp asc''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-equipment-health-scores",
-            "text": '''EquipmentHealthScores''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-equipment-utilisation",
-            "text": '''let report_day = startofday(ago(1d));
+| order by Timestamp asc'''),
+
+        q("equipment-health-scores", "EquipmentHealthScores"),
+
+        q("equipment-utilisation", '''\
+let report_day = startofday(ago(1d));
 EquipmentTelemetry
 | where Timestamp between (report_day .. (report_day + 1d)) and Quality == "good"
 | summarize ActiveMinutes = dcount(bin(Timestamp, 1m)) by EquipmentId, EquipmentType
 | extend UtilisationPct = round(ActiveMinutes / 1440.0 * 100, 1)
-| order by UtilisationPct desc''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        
-        # Page 4: Production
-        {
-            "id": "q-conveyor-throughput",
-            "text": '''ProductionMetrics
+| order by UtilisationPct desc'''),
+
+        # ── Page 4: Production ─────────────────────────────────────────
+        q("conveyor-throughput", '''\
+ProductionMetrics
 | where SensorType in ("belt_load_kg_m", "belt_speed_m_s")
     and Timestamp > ago(7d) and Quality == "good"
 | summarize AvgValue = round(avg(Value), 2)
   by EquipmentId, SensorType, bin(Timestamp, 1m)
-| order by Timestamp asc''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-truck-cycle-times",
-            "text": '''ProductionMetrics
+| order by Timestamp asc'''),
+
+        q("truck-cycle-times", '''\
+ProductionMetrics
 | where SensorType == "cycle_state" and EquipmentType == "haul_truck"
     and Timestamp > ago(24h) and Quality == "good"
 | extend CyclePhase = case(
@@ -818,194 +847,83 @@ EquipmentTelemetry
     datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0, 1)
   by EquipmentId, CyclePhase, bin(Timestamp, 1h)
 | summarize AvgDuration_min = round(avg(PhaseDuration_min), 1)
-  by EquipmentId, CyclePhase''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-route-efficiency",
-            "text": '''RouteEfficiency''',
-            "dataSourceId": "ds-mining-ops"
-        },
-        {
-            "id": "q-production-7d",
-            "text": '''ProductionMetrics
+  by EquipmentId, CyclePhase'''),
+
+        q("route-efficiency", "RouteEfficiency"),
+
+        q("production-7d", '''\
+ProductionMetrics
 | where SensorType == "load_tonnes" and Timestamp > ago(7d) and Quality == "good"
 | summarize DailyTonnes = round(sum(Value), 0) by Day = startofday(Timestamp)
-| order by Day asc''',
-            "dataSourceId": "ds-mining-ops"
-        },
+| order by Day asc'''),
     ]
 
-    # Define pages and tiles (18 tiles across 4 pages)
+    # ------------------------------------------------------------------
+    # Pages — NO "tiles" key; tiles are at root level with a pageId ref.
+    # All page IDs must be RFC 4122 UUIDs.
+    # ------------------------------------------------------------------
     pages = [
-        # Page 1: Operations Overview
-        {
-            "id": "page-ops",
-            "name": "Operations Overview",
-            "tiles": [
-                {
-                    "id": "tile-active-equipment",
-                    "title": "Active Equipment Count",
-                    "queryId": "q-active-equipment",
-                    "visualType": "stat",
-                    "layout": {"x": 0, "y": 0, "width": 4, "height": 3},
-                    "autoRefresh": 30
-                },
-                {
-                    "id": "tile-shift-tonnage",
-                    "title": "Shift Tonnage vs Target",
-                    "queryId": "q-shift-tonnage",
-                    "visualType": "bar",
-                    "layout": {"x": 4, "y": 0, "width": 6, "height": 3},
-                    "autoRefresh": 60
-                },
-                {
-                    "id": "tile-equipment-map",
-                    "title": "Equipment Status Map",
-                    "queryId": "q-equipment-map",
-                    "visualType": "map",
-                    "layout": {"x": 0, "y": 3, "width": 6, "height": 4},
-                    "autoRefresh": 30
-                },
-                {
-                    "id": "tile-active-alerts",
-                    "title": "Active Alerts",
-                    "queryId": "q-active-alerts",
-                    "visualType": "table",
-                    "layout": {"x": 6, "y": 3, "width": 6, "height": 4},
-                    "autoRefresh": 15
-                },
-            ],
-        },
-        
-        # Page 2: Safety & Environment
-        {
-            "id": "page-safety",
-            "name": "Safety & Environment",
-            "tiles": [
-                {
-                    "id": "tile-gas-levels",
-                    "title": "Gas Levels by Zone",
-                    "queryId": "q-gas-levels",
-                    "visualType": "line",
-                    "layout": {"x": 0, "y": 0, "width": 8, "height": 4},
-                    "autoRefresh": 15
-                },
-                {
-                    "id": "tile-temp-heatmap",
-                    "title": "Temperature Heat Map",
-                    "queryId": "q-temp-heatmap",
-                    "visualType": "table",
-                    "layout": {"x": 8, "y": 0, "width": 4, "height": 4},
-                    "autoRefresh": 60
-                },
-                {
-                    "id": "tile-threshold-breaches",
-                    "title": "Threshold Breaches 24h",
-                    "queryId": "q-threshold-breaches",
-                    "visualType": "table",
-                    "layout": {"x": 0, "y": 4, "width": 6, "height": 4},
-                    "autoRefresh": 30
-                },
-                {
-                    "id": "tile-safety-incidents",
-                    "title": "Safety Incident Timeline",
-                    "queryId": "q-safety-incidents",
-                    "visualType": "table",
-                    "layout": {"x": 6, "y": 4, "width": 6, "height": 4},
-                    "autoRefresh": 300
-                },
-            ],
-        },
-        
-        # Page 3: Equipment Health
-        {
-            "id": "page-equipment",
-            "name": "Equipment Health",
-            "tiles": [
-                {
-                    "id": "tile-vibration-anomaly",
-                    "title": "Vibration Anomaly Trend",
-                    "queryId": "q-vibration-anomaly-trend",
-                    "visualType": "scatter",
-                    "layout": {"x": 0, "y": 0, "width": 6, "height": 4},
-                    "autoRefresh": 30
-                },
-                {
-                    "id": "tile-drill-hydraulic",
-                    "title": "Drill Hydraulic Pressure",
-                    "queryId": "q-drill-hydraulic",
-                    "visualType": "line",
-                    "layout": {"x": 6, "y": 0, "width": 6, "height": 4},
-                    "autoRefresh": 30
-                },
-                {
-                    "id": "tile-health-scores",
-                    "title": "Equipment Health Scores",
-                    "queryId": "q-equipment-health-scores",
-                    "visualType": "table",
-                    "layout": {"x": 0, "y": 4, "width": 6, "height": 4},
-                    "autoRefresh": 14400
-                },
-                {
-                    "id": "tile-utilisation",
-                    "title": "Equipment Utilisation",
-                    "queryId": "q-equipment-utilisation",
-                    "visualType": "bar",
-                    "layout": {"x": 6, "y": 4, "width": 6, "height": 4},
-                    "autoRefresh": 300
-                },
-            ],
-        },
-        
-        # Page 4: Production
-        {
-            "id": "page-production",
-            "name": "Production",
-            "tiles": [
-                {
-                    "id": "tile-conveyor-throughput",
-                    "title": "Conveyor Throughput Trend",
-                    "queryId": "q-conveyor-throughput",
-                    "visualType": "area",
-                    "layout": {"x": 0, "y": 0, "width": 8, "height": 4},
-                    "autoRefresh": 60
-                },
-                {
-                    "id": "tile-truck-cycle-times",
-                    "title": "Haul Truck Cycle Times",
-                    "queryId": "q-truck-cycle-times",
-                    "visualType": "bar",
-                    "layout": {"x": 8, "y": 0, "width": 4, "height": 4},
-                    "autoRefresh": 300
-                },
-                {
-                    "id": "tile-route-efficiency",
-                    "title": "Route Efficiency",
-                    "queryId": "q-route-efficiency",
-                    "visualType": "table",
-                    "layout": {"x": 0, "y": 4, "width": 6, "height": 4},
-                    "autoRefresh": 300
-                },
-                {
-                    "id": "tile-production-7d",
-                    "title": "7-Day Production Trend",
-                    "queryId": "q-production-7d",
-                    "visualType": "line",
-                    "layout": {"x": 6, "y": 4, "width": 6, "height": 4},
-                    "autoRefresh": 900
-                },
-            ],
-        },
+        {"id": page_id["ops"],        "name": "Operations Overview"},
+        {"id": page_id["safety"],     "name": "Safety & Environment"},
+        {"id": page_id["equipment"],  "name": "Equipment Health"},
+        {"id": page_id["production"], "name": "Production"},
+    ]
+
+    # ------------------------------------------------------------------
+    # Tiles — at ROOT level.  Each tile carries:
+    #   • id         – UUID
+    #   • pageId     – UUID of the owning page
+    #   • queryId    – UUID of the backing query
+    #   • visualType – chart kind
+    #   • layout     – {x, y, width, height}
+    # ------------------------------------------------------------------
+    def tile(
+        key: str,
+        title: str,
+        pg: str,
+        visual: str,
+        x: int, y: int, w: int, h: int,
+    ) -> dict[str, Any]:
+        return {
+            "id":         t_id[key],
+            "title":      title,
+            "pageId":     page_id[pg],
+            "queryId":    q_id[key],
+            "visualType": visual,
+            "layout":     {"x": x, "y": y, "width": w, "height": h},
+        }
+
+    tiles = [
+        # ── Page 1: Operations Overview ───────────────────────────────
+        tile("active-equipment",   "Active Equipment Count",      "ops",        "stat",    0, 0, 4, 3),
+        tile("shift-tonnage",      "Shift Tonnage vs Target",     "ops",        "bar",     4, 0, 6, 3),
+        tile("equipment-map",      "Equipment Status Map",        "ops",        "map",     0, 3, 6, 4),
+        tile("active-alerts",      "Active Alerts",               "ops",        "table",   6, 3, 6, 4),
+        # ── Page 2: Safety & Environment ──────────────────────────────
+        tile("gas-levels",         "Gas Levels by Zone",          "safety",     "line",    0, 0, 8, 4),
+        tile("temp-heatmap",       "Temperature Heat Map",        "safety",     "table",   8, 0, 4, 4),
+        tile("threshold-breaches", "Threshold Breaches 24h",      "safety",     "table",   0, 4, 6, 4),
+        tile("safety-incidents",   "Safety Incident Timeline",    "safety",     "table",   6, 4, 6, 4),
+        # ── Page 3: Equipment Health ───────────────────────────────────
+        tile("vibration-anomaly",      "Vibration Anomaly Trend",  "equipment",  "scatter", 0, 0, 6, 4),
+        tile("drill-hydraulic",        "Drill Hydraulic Pressure", "equipment",  "line",    6, 0, 6, 4),
+        tile("equipment-health-scores","Equipment Health Scores",  "equipment",  "table",   0, 4, 6, 4),
+        tile("equipment-utilisation",  "Equipment Utilisation",    "equipment",  "bar",     6, 4, 6, 4),
+        # ── Page 4: Production ─────────────────────────────────────────
+        tile("conveyor-throughput", "Conveyor Throughput Trend",  "production", "area",    0, 0, 8, 4),
+        tile("truck-cycle-times",   "Haul Truck Cycle Times",     "production", "bar",     8, 0, 4, 4),
+        tile("route-efficiency",    "Route Efficiency",           "production", "table",   0, 4, 6, 4),
+        tile("production-7d",       "7-Day Production Trend",     "production", "line",    6, 4, 6, 4),
     ]
 
     dashboard_json = {
-        "autoRefresh": {"enabled": True, "defaultRefreshRate": "30s"},
-        "dataSources": [data_source],
-        "queries": queries,
-        "pages": pages,
-        "schema_version": "52",
-        "title": DASHBOARD_NAME,
+        "autoRefresh":  {"enabled": True, "defaultRefreshRate": "30s"},
+        "dataSources":  [data_source],
+        "pages":        pages,
+        "tiles":        tiles,        # root-level; NOT inside pages
+        "queries":      queries,
+        "baseQueries":  [],           # required by schema; empty is valid
+        "parameters":   [],           # required by schema; empty is valid
     }
 
     encoded = base64.b64encode(json.dumps(dashboard_json).encode()).decode()
