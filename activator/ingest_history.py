@@ -202,13 +202,22 @@ def ingest_csv(args: argparse.Namespace) -> None:
     # Authenticate
     credential = get_credential(args)
 
-    # Build Kusto connection string
-    kcsb = KustoConnectionStringBuilder.with_azure_token_credential(args.cluster, credential)
+    # Build Kusto connection strings — query endpoint for verification,
+    # ingest endpoint (ingest- prefix) for QueuedIngestClient.
+    query_uri = args.cluster.rstrip("/")
+    if query_uri.startswith("https://ingest-"):
+        query_uri = query_uri.replace("https://ingest-", "https://", 1)
+    ingest_uri = query_uri.replace("https://", "https://ingest-", 1)
+
+    kcsb_query = KustoConnectionStringBuilder.with_azure_token_credential(query_uri, credential)
+    kcsb_ingest = KustoConnectionStringBuilder.with_azure_token_credential(ingest_uri, credential)
 
     # Create Kusto clients
     log.info("Connecting to Kusto cluster…")
-    kusto_client = KustoClient(kcsb)
-    ingest_client = QueuedIngestClient(kcsb)
+    log.info("  Query endpoint:  %s", query_uri)
+    log.info("  Ingest endpoint: %s", ingest_uri)
+    kusto_client = KustoClient(kcsb_query)
+    ingest_client = QueuedIngestClient(kcsb_ingest)
 
     # Verify table exists
     if not verify_table_exists(kusto_client, args.database, args.table):
