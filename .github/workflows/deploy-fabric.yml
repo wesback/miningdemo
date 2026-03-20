@@ -152,7 +152,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r simulator/requirements.txt
-          pip install azure-kusto-data~=4.3.0 azure-kusto-ingest~=4.3.0
+          pip install azure-kusto-data~=4.3.0 azure-kusto-ingest~=4.3.0 azure-identity~=1.15.0
       
       - name: Validate historical data secrets
         run: |

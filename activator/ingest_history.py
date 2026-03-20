@@ -60,7 +60,6 @@ try:
         QueuedIngestClient,
         IngestionProperties,
         DataFormat,
-        IngestionStatus,
     )
 except ImportError:
     print("ERROR: azure-kusto-data and azure-kusto-ingest packages required.")
