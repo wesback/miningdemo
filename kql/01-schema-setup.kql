@@ -1,0 +1,171 @@
+// =============================================================================
+// Mining Real-Time Intelligence — KQL Database Schema Setup
+// Run EACH command block ONE AT A TIME in a KQL Queryset connected to MiningOps.
+// Select a single command (from the dot to the end of its block) then click Run.
+// =============================================================================
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 1: Landing table — all raw sensor events from Eventstream
+// ---------------------------------------------------------------------------
+.create table SensorReadings (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 2: JSON ingestion mapping for Eventstream / Event Hub
+// ---------------------------------------------------------------------------
+.create table SensorReadings ingestion json mapping "SensorReadingsJsonMapping" '[{"column":"EventId","path":"$.EventId","datatype":"string"},{"column":"EquipmentId","path":"$.EquipmentId","datatype":"string"},{"column":"EquipmentType","path":"$.EquipmentType","datatype":"string"},{"column":"SensorType","path":"$.SensorType","datatype":"string"},{"column":"Value","path":"$.Value","datatype":"real"},{"column":"Unit","path":"$.Unit","datatype":"string"},{"column":"Zone","path":"$.Zone","datatype":"string"},{"column":"Latitude","path":"$.Latitude","datatype":"real"},{"column":"Longitude","path":"$.Longitude","datatype":"real"},{"column":"Timestamp","path":"$.Timestamp","datatype":"datetime"},{"column":"Quality","path":"$.Quality","datatype":"string"},{"column":"Shift","path":"$.Shift","datatype":"string"}]'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 3: Materialised table — equipment telemetry
+// ---------------------------------------------------------------------------
+.create table EquipmentTelemetry (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 4: Materialised table — environmental readings
+// ---------------------------------------------------------------------------
+.create table EnvironmentalReadings (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 5: Materialised table — production metrics
+// ---------------------------------------------------------------------------
+.create table ProductionMetrics (EventId: string, EquipmentId: string, EquipmentType: string, SensorType: string, Value: real, Unit: string, Zone: string, Latitude: real, Longitude: real, Timestamp: datetime, Quality: string, Shift: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 6: Update policy function — equipment telemetry filter
+// ---------------------------------------------------------------------------
+.create-or-alter function EquipmentTelemetryFilter() {
+    SensorReadings
+    | where EquipmentType in ("haul_truck", "conveyor", "drill")
+    | where SensorType !in ("load_tonnes", "belt_load_kg_m", "belt_speed_m_s", "cycle_state")
+}
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 7: Update policy function — environmental readings filter
+// ---------------------------------------------------------------------------
+.create-or-alter function EnvironmentalReadingsFilter() {
+    SensorReadings
+    | where EquipmentType == "environmental_sensor"
+}
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 8: Update policy function — production metrics filter
+// ---------------------------------------------------------------------------
+.create-or-alter function ProductionMetricsFilter() {
+    SensorReadings
+    | where SensorType in ("load_tonnes", "belt_load_kg_m", "belt_speed_m_s", "cycle_state")
+}
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 9: Attach update policy — EquipmentTelemetry
+// ---------------------------------------------------------------------------
+.alter table EquipmentTelemetry policy update '[{"IsEnabled":true,"Source":"SensorReadings","Query":"EquipmentTelemetryFilter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 10: Attach update policy — EnvironmentalReadings
+// ---------------------------------------------------------------------------
+.alter table EnvironmentalReadings policy update '[{"IsEnabled":true,"Source":"SensorReadings","Query":"EnvironmentalReadingsFilter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 11: Attach update policy — ProductionMetrics
+// ---------------------------------------------------------------------------
+.alter table ProductionMetrics policy update '[{"IsEnabled":true,"Source":"SensorReadings","Query":"ProductionMetricsFilter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 12: Reference table — equipment registry
+// ---------------------------------------------------------------------------
+.create table EquipmentRegistry (EquipmentId: string, EquipmentType: string, Make: string, Model: string, YearCommissioned: int, Zone: string, Status: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 13: Reference table — alert thresholds
+// ---------------------------------------------------------------------------
+.create table AlertThresholds (SensorType: string, WarningLow: real, WarningHigh: real, CriticalLow: real, CriticalHigh: real, Unit: string, Description: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 14: Reference table — safety incidents
+// ---------------------------------------------------------------------------
+.create table SafetyIncidents (IncidentId: string, Timestamp: datetime, Zone: string, Severity: string, Description: string, EquipmentId: string)
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 15: Enable streaming ingestion — SensorReadings
+// ---------------------------------------------------------------------------
+.alter table SensorReadings policy streamingingestion '{"IsEnabled": true}'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 16: Enable streaming ingestion — EquipmentTelemetry
+// ---------------------------------------------------------------------------
+.alter table EquipmentTelemetry policy streamingingestion '{"IsEnabled": true}'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 17: Enable streaming ingestion — EnvironmentalReadings
+// ---------------------------------------------------------------------------
+.alter table EnvironmentalReadings policy streamingingestion '{"IsEnabled": true}'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 18: Enable streaming ingestion — ProductionMetrics
+// ---------------------------------------------------------------------------
+.alter table ProductionMetrics policy streamingingestion '{"IsEnabled": true}'
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 19: Retention — SensorReadings
+// ---------------------------------------------------------------------------
+.alter table SensorReadings policy retention softdelete = 365d recoverability = enabled
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 20: Caching — SensorReadings
+// ---------------------------------------------------------------------------
+.alter table SensorReadings policy caching hot = 90d
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 21: Retention — EquipmentTelemetry
+// ---------------------------------------------------------------------------
+.alter table EquipmentTelemetry policy retention softdelete = 365d recoverability = enabled
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 22: Caching — EquipmentTelemetry
+// ---------------------------------------------------------------------------
+.alter table EquipmentTelemetry policy caching hot = 90d
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 23: Retention — EnvironmentalReadings
+// ---------------------------------------------------------------------------
+.alter table EnvironmentalReadings policy retention softdelete = 365d recoverability = enabled
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 24: Caching — EnvironmentalReadings
+// ---------------------------------------------------------------------------
+.alter table EnvironmentalReadings policy caching hot = 90d
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 25: Retention — ProductionMetrics
+// ---------------------------------------------------------------------------
+.alter table ProductionMetrics policy retention softdelete = 365d recoverability = enabled
+
+
+// ---------------------------------------------------------------------------
+// COMMAND 26: Caching — ProductionMetrics
+// ---------------------------------------------------------------------------
+.alter table ProductionMetrics policy caching hot = 90d

@@ -1,0 +1,433 @@
+// =============================================================================
+// Mining Real-Time Intelligence — Production KQL Queries
+// Each query is named and tagged to the user story it supports.
+// =============================================================================
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  EPIC 1 — EQUIPMENT TELEMETRY & HEALTH                                  ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+
+// ---------------------------------------------------------------------------
+// US-1.1  Equipment Status Summary (Dashboard stat card)
+// Shows count of equipment by current status: Running / Idle / Fault
+// ---------------------------------------------------------------------------
+// Query: EquipmentStatusSummary
+let cutoff = ago(2m);
+EquipmentTelemetry
+| where Timestamp > cutoff and Quality == "good"
+| summarize LastValue = arg_max(Timestamp, Value, SensorType) by EquipmentId, EquipmentType
+| extend Status = case(
+    SensorType == "engine_temp_c" and Value > 105, "Fault",
+    SensorType == "engine_temp_c" and Value < 30,  "Idle",
+    SensorType == "belt_speed_m_s" and Value == 0,  "Idle",
+    SensorType == "hydraulic_psi" and Value < 500,  "Idle",
+    "Running"
+)
+| summarize Count = count() by Status
+| order by Status asc;
+
+// ---------------------------------------------------------------------------
+// US-1.1  Equipment Current Position (Map visual)
+// Latest GPS coordinates per equipment with status.
+// ---------------------------------------------------------------------------
+// Query: EquipmentCurrentPosition
+let cutoff = ago(5m);
+EquipmentTelemetry
+| where Timestamp > cutoff and Quality == "good"
+| summarize arg_max(Timestamp, *) by EquipmentId
+| project EquipmentId, EquipmentType, Latitude, Longitude, Zone,
+          SensorType, Value, Timestamp
+| join kind=leftouter (
+    EquipmentRegistry | project EquipmentId, Make, Model
+) on EquipmentId
+| project-away EquipmentId1;
+
+// ---------------------------------------------------------------------------
+// US-1.2  Vibration Anomaly Detection
+// Flags readings > 3σ above the rolling 15-minute average per equipment.
+// ---------------------------------------------------------------------------
+// Query: VibrationAnomalies
+let window = 15m;
+let sigma_threshold = 3.0;
+EquipmentTelemetry
+| where SensorType == "vibration_mm_s"
+    and Timestamp > ago(1h)
+    and Quality == "good"
+| partition by EquipmentId (
+    order by Timestamp asc
+    | extend RollingAvg  = series_fir(Value, repeat(1, 90), true, true),  // ~15 min at 10 s interval
+            RollingStd  = series_fir(Value, repeat(1, 90), true, true)    // placeholder — computed below
+)
+// Simplified: compute stats over the window per equipment
+| summarize
+    Avg15m   = avg(Value),
+    Std15m   = stdev(Value),
+    Latest   = arg_max(Timestamp, Value)
+  by EquipmentId, bin(Timestamp, window)
+| extend UpperBound = Avg15m + (sigma_threshold * Std15m)
+| where Latest_Value > UpperBound
+| project
+    EquipmentId,
+    WindowEnd     = Timestamp + window,
+    LatestValue   = Latest_Value,
+    Avg15m        = round(Avg15m, 2),
+    Std15m        = round(Std15m, 2),
+    UpperBound    = round(UpperBound, 2),
+    Deviation     = round((Latest_Value - Avg15m) / Std15m, 1)
+| order by Deviation desc;
+
+// ---------------------------------------------------------------------------
+// US-1.2  Vibration Anomaly Trend (Scatter chart — last 4 hours)
+// ---------------------------------------------------------------------------
+// Query: VibrationAnomalyTrend
+let sigma_threshold = 3.0;
+EquipmentTelemetry
+| where SensorType == "vibration_mm_s"
+    and Timestamp > ago(4h)
+    and Quality == "good"
+| summarize
+    AvgValue = avg(Value),
+    StdValue = stdev(Value),
+    MaxValue = max(Value),
+    MinValue = min(Value)
+  by EquipmentId, Bin = bin(Timestamp, 1m)
+| extend UpperBound = AvgValue + (sigma_threshold * StdValue)
+| extend IsAnomaly = MaxValue > UpperBound
+| project Bin, EquipmentId, AvgValue, MaxValue, UpperBound, IsAnomaly;
+
+// ---------------------------------------------------------------------------
+// US-1.3  Hydraulic Pressure Drop Alert
+// Finds drills with pressure < 1500 PSI sustained for 30+ seconds.
+// ---------------------------------------------------------------------------
+// Query: HydraulicPressureDrops
+EquipmentTelemetry
+| where SensorType == "hydraulic_psi"
+    and EquipmentType == "drill"
+    and Timestamp > ago(10m)
+    and Quality == "good"
+| order by EquipmentId asc, Timestamp asc
+| extend IsBelowThreshold = Value < 1500
+| summarize
+    StartTime     = min(Timestamp),
+    EndTime       = max(Timestamp),
+    Duration_s    = datetime_diff('second', max(Timestamp), min(Timestamp)),
+    MinPressure   = min(Value),
+    AvgPressure   = round(avg(Value), 0),
+    ReadingCount  = count()
+  by EquipmentId, IsBelowThreshold
+| where IsBelowThreshold == true and Duration_s >= 30
+| project EquipmentId, StartTime, EndTime, Duration_s, MinPressure, AvgPressure, ReadingCount
+| order by Duration_s desc;
+
+// ---------------------------------------------------------------------------
+// US-1.3  Drill Hydraulic Pressure Trend (Line chart)
+// ---------------------------------------------------------------------------
+// Query: DrillHydraulicTrend
+EquipmentTelemetry
+| where SensorType == "hydraulic_psi"
+    and EquipmentType == "drill"
+    and Timestamp > ago(1h)
+    and Quality == "good"
+| summarize AvgPressure = round(avg(Value), 0) by EquipmentId, bin(Timestamp, 30s)
+| order by Timestamp asc;
+
+// ---------------------------------------------------------------------------
+// US-1.4  Equipment Health Score
+// Composite score from engine temp, oil pressure, and operating hours.
+// ---------------------------------------------------------------------------
+// Query: EquipmentHealthScores
+let scoring_window = 4h;
+let temp_weight = 0.35;
+let oil_weight  = 0.35;
+let age_weight  = 0.30;
+// Temperature score: 100 at 80°C, decreasing linearly to 0 at 110°C
+let TempScores = EquipmentTelemetry
+    | where SensorType == "engine_temp_c" and EquipmentType == "haul_truck"
+        and Timestamp > ago(scoring_window) and Quality == "good"
+    | summarize AvgTemp = avg(Value) by EquipmentId
+    | extend TempScore = max_of(0.0, min_of(100.0, (110.0 - AvgTemp) / 0.3));
+// Oil pressure score: 100 at 400 kPa, decreasing toward limits
+let OilScores = EquipmentTelemetry
+    | where SensorType == "oil_pressure_kpa" and EquipmentType == "haul_truck"
+        and Timestamp > ago(scoring_window) and Quality == "good"
+    | summarize AvgOil = avg(Value), StdOil = stdev(Value) by EquipmentId
+    | extend OilScore = max_of(0.0, min_of(100.0, 100.0 - (StdOil / AvgOil) * 200.0));
+// Age score: based on year commissioned from registry
+let AgeScores = EquipmentRegistry
+    | where EquipmentType == "haul_truck"
+    | extend YearsOld = datetime_diff('year', now(), datetime(2026-01-01)) + (2026 - YearCommissioned)
+    | extend AgeScore = max_of(0.0, 100.0 - (YearsOld * 10.0));
+TempScores
+| join kind=leftouter OilScores  on EquipmentId
+| join kind=leftouter AgeScores  on EquipmentId
+| extend HealthScore = round(
+    (coalesce(TempScore, 50.0) * temp_weight) +
+    (coalesce(OilScore, 50.0)  * oil_weight) +
+    (coalesce(AgeScore, 50.0)  * age_weight), 0)
+| extend Tier = case(
+    HealthScore < 40, "Critical",
+    HealthScore < 70, "Warning",
+    "Healthy")
+| project EquipmentId, HealthScore, TempScore = round(coalesce(TempScore, 50.0), 0),
+          OilScore = round(coalesce(OilScore, 50.0), 0),
+          AgeScore = round(coalesce(AgeScore, 50.0), 0), Tier
+| order by HealthScore asc;
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  EPIC 2 — ENVIRONMENTAL & SAFETY MONITORING                             ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+
+// ---------------------------------------------------------------------------
+// US-2.1  Gas Level Threshold Breaches (Alert query)
+// Real-time detection of CO and CH₄ exceeding regulatory limits.
+// ---------------------------------------------------------------------------
+// Query: GasThresholdBreaches
+EnvironmentalReadings
+| where Timestamp > ago(5m) and Quality == "good"
+| where (SensorType == "co_ppm" and Value > 35)
+     or (SensorType == "ch4_pct" and Value > 1.0)
+| project Timestamp, EquipmentId, Zone, SensorType, Value, Unit
+| extend AlertLevel = "CRITICAL",
+         Threshold = iff(SensorType == "co_ppm", 35.0, 1.0)
+| extend ExceedancePct = round((Value - Threshold) / Threshold * 100, 1)
+| order by Timestamp desc;
+
+// ---------------------------------------------------------------------------
+// US-2.1  Gas Levels by Zone (Multi-line chart — last 2 hours)
+// ---------------------------------------------------------------------------
+// Query: GasLevelsByZone
+EnvironmentalReadings
+| where SensorType in ("co_ppm", "ch4_pct")
+    and Timestamp > ago(2h)
+    and Quality == "good"
+| summarize AvgValue = round(avg(Value), 2) by Zone, SensorType, bin(Timestamp, 1m)
+| order by Timestamp asc;
+
+// ---------------------------------------------------------------------------
+// US-2.2  Zone Temperature Heat Map
+// Latest temperature per zone with threshold flag.
+// ---------------------------------------------------------------------------
+// Query: ZoneTemperatures
+EnvironmentalReadings
+| where SensorType == "ambient_temp_c" and Timestamp > ago(5m) and Quality == "good"
+| summarize AvgTemp = round(avg(Value), 1), MaxTemp = round(max(Value), 1) by Zone
+| extend Status = case(MaxTemp > 35, "CRITICAL", MaxTemp > 32, "WARNING", "NORMAL")
+| order by MaxTemp desc;
+
+// ---------------------------------------------------------------------------
+// US-2.2  Temperature Trend by Zone (line chart)
+// ---------------------------------------------------------------------------
+// Query: TemperatureTrendByZone
+EnvironmentalReadings
+| where SensorType == "ambient_temp_c" and Timestamp > ago(4h) and Quality == "good"
+| summarize AvgTemp = round(avg(Value), 1) by Zone, bin(Timestamp, 1m)
+| order by Timestamp asc;
+
+// ---------------------------------------------------------------------------
+// US-2.3  Safety Incident Correlation
+// Environmental conditions in 30-minute window before each incident.
+// ---------------------------------------------------------------------------
+// Query: IncidentEnvironmentalCorrelation
+SafetyIncidents
+| extend WindowStart = Timestamp - 30m
+| join kind=inner (
+    EnvironmentalReadings
+    | where Quality == "good"
+) on Zone
+| where EnvironmentalReadings_Timestamp between (WindowStart .. Timestamp)
+| summarize
+    AvgValue = round(avg(Value), 2),
+    MaxValue = round(max(Value), 2),
+    MinValue = round(min(Value), 2),
+    Readings = count()
+  by IncidentId, Incident_Timestamp = SafetyIncidents_Timestamp,
+     Severity, IncidentDescription = Description,
+     Zone, SensorType
+| order by Incident_Timestamp desc, SensorType asc;
+
+// ---------------------------------------------------------------------------
+// US-2.3  Recent Threshold Breaches (last 24 h)
+// ---------------------------------------------------------------------------
+// Query: RecentBreaches
+EnvironmentalReadings
+| where Timestamp > ago(24h) and Quality == "good"
+| join kind=inner (AlertThresholds) on SensorType
+| where Value > CriticalHigh or Value < CriticalLow
+| project Timestamp, Zone, SensorType, Value, Unit,
+          Threshold = iff(Value > CriticalHigh, CriticalHigh, CriticalLow),
+          Direction = iff(Value > CriticalHigh, "ABOVE", "BELOW")
+| order by Timestamp desc;
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  EPIC 3 — PRODUCTION THROUGHPUT                                         ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+
+// ---------------------------------------------------------------------------
+// US-3.1  Shift Tonnage Progress (Bar chart)
+// Tonnes mined/hauled/processed in current shift vs target.
+// ---------------------------------------------------------------------------
+// Query: ShiftTonnageProgress
+let shift_start = bin(now(), 8h);  // approximate shift boundary
+let shift_target_tonnes = 5000.0;
+ProductionMetrics
+| where SensorType == "load_tonnes"
+    and Timestamp > shift_start
+    and Quality == "good"
+| summarize TotalTonnes = round(sum(Value), 0) by EquipmentType
+| extend Target = shift_target_tonnes
+| extend PctOfTarget = round(TotalTonnes / Target * 100, 1)
+| extend RAG = case(
+    PctOfTarget >= 95, "Green",
+    PctOfTarget >= 80, "Amber",
+    "Red");
+
+// ---------------------------------------------------------------------------
+// US-3.2  Conveyor Throughput Trend (Area chart — 7 days)
+// ---------------------------------------------------------------------------
+// Query: ConveyorThroughput
+ProductionMetrics
+| where SensorType in ("belt_load_kg_m", "belt_speed_m_s")
+    and Timestamp > ago(7d)
+    and Quality == "good"
+| summarize AvgValue = round(avg(Value), 2) by EquipmentId, SensorType, bin(Timestamp, 1m)
+| order by Timestamp asc;
+
+// ---------------------------------------------------------------------------
+// US-3.3  Haul Truck Cycle Times (Grouped bar chart)
+// Average cycle time segments per truck.
+// ---------------------------------------------------------------------------
+// Query: TruckCycleTimes
+ProductionMetrics
+| where SensorType == "cycle_state"
+    and EquipmentType == "haul_truck"
+    and Timestamp > ago(24h)
+    and Quality == "good"
+| extend CyclePhase = case(
+    Value == 1, "Loading",
+    Value == 2, "Travel-Loaded",
+    Value == 3, "Dumping",
+    Value == 4, "Travel-Empty",
+    "Unknown")
+| where CyclePhase != "Unknown"
+| summarize
+    PhaseDuration_min = round(datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0, 1)
+  by EquipmentId, CyclePhase, CycleGroup = bin(Timestamp, 1h)
+| summarize AvgDuration_min = round(avg(PhaseDuration_min), 1) by EquipmentId, CyclePhase
+| order by EquipmentId asc, CyclePhase asc;
+
+// ---------------------------------------------------------------------------
+// US-3.3  Route Efficiency — trucks above 120% of average cycle
+// ---------------------------------------------------------------------------
+// Query: RouteEfficiency
+ProductionMetrics
+| where SensorType == "cycle_state"
+    and EquipmentType == "haul_truck"
+    and Timestamp > ago(24h)
+    and Quality == "good"
+| summarize CycleTime_min = datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0
+  by EquipmentId, Zone, CycleBin = bin(Timestamp, 2h)
+| summarize AvgCycle = avg(CycleTime_min), Cycles = count() by EquipmentId, Zone
+| extend OverallAvg = toscalar(
+    ProductionMetrics
+    | where SensorType == "cycle_state" and EquipmentType == "haul_truck"
+        and Timestamp > ago(24h) and Quality == "good"
+    | summarize CycleTime_min = datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0
+      by EquipmentId, CycleBin = bin(Timestamp, 2h)
+    | summarize avg(CycleTime_min)
+)
+| extend Efficiency = round(AvgCycle / OverallAvg * 100, 1)
+| extend Flagged = Efficiency > 120
+| order by Efficiency desc;
+
+// ---------------------------------------------------------------------------
+// US-3.1  7-Day Production Trend (Line chart)
+// ---------------------------------------------------------------------------
+// Query: ProductionTrend7d
+ProductionMetrics
+| where SensorType == "load_tonnes" and Timestamp > ago(7d) and Quality == "good"
+| summarize DailyTonnes = round(sum(Value), 0) by Day = startofday(Timestamp)
+| order by Day asc;
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  EPIC 4 — OPERATIONAL ANALYTICS                                         ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+
+// ---------------------------------------------------------------------------
+// US-4.1  Equipment Utilisation Report (Bar chart)
+// Operating hours / available hours per asset, previous day.
+// ---------------------------------------------------------------------------
+// Query: EquipmentUtilisation
+let report_day = startofday(ago(1d));
+let available_hours = 24.0;
+EquipmentTelemetry
+| where Timestamp between (report_day .. (report_day + 1d))
+    and Quality == "good"
+| summarize ActiveMinutes = dcount(bin(Timestamp, 1m)) by EquipmentId, EquipmentType
+| extend OperatingHours = round(ActiveMinutes / 60.0, 1)
+| extend UtilisationPct = round(OperatingHours / available_hours * 100, 1)
+| order by UtilisationPct desc;
+
+// ---------------------------------------------------------------------------
+// US-4.2  Shift Handover Summary
+// Auto-generated summary for the most recent completed shift.
+// ---------------------------------------------------------------------------
+// Query: ShiftHandoverSummary
+let shift_end = bin(now(), 8h);
+let shift_start = shift_end - 8h;
+let production = ProductionMetrics
+    | where SensorType == "load_tonnes" and Timestamp between (shift_start .. shift_end)
+    | summarize TotalTonnes = round(sum(Value), 0);
+let alerts = EnvironmentalReadings
+    | where Timestamp between (shift_start .. shift_end) and Quality == "good"
+    | join kind=inner (AlertThresholds) on SensorType
+    | where Value > CriticalHigh or Value < CriticalLow
+    | summarize AlertCount = count();
+let faults = EquipmentTelemetry
+    | where Timestamp between (shift_start .. shift_end) and Quality == "good"
+    | where (SensorType == "engine_temp_c" and Value > 105)
+         or (SensorType == "hydraulic_psi" and Value < 1500)
+    | summarize FaultEvents = count(), FaultEquipment = dcount(EquipmentId);
+let top_anomalies = EquipmentTelemetry
+    | where SensorType == "vibration_mm_s"
+        and Timestamp between (shift_start .. shift_end)
+        and Quality == "good"
+    | summarize Avg = avg(Value), Std = stdev(Value), Max = max(Value) by EquipmentId
+    | extend Deviation = round((Max - Avg) / Std, 1)
+    | top 5 by Deviation desc
+    | project EquipmentId, MaxVibration = round(Max, 2), Deviation;
+print ShiftStart        = shift_start,
+      ShiftEnd          = shift_end,
+      TotalTonnes       = toscalar(production),
+      CriticalAlerts    = toscalar(alerts),
+      FaultEvents       = toscalar(faults | project FaultEvents),
+      FaultedEquipment  = toscalar(faults | project FaultEquipment);
+// Top anomalies displayed as separate tile
+top_anomalies;
+
+// ---------------------------------------------------------------------------
+// US-4.3  Active Alerts (Table tile — last 15 min)
+// ---------------------------------------------------------------------------
+// Query: ActiveAlerts
+let cutoff = ago(15m);
+EnvironmentalReadings
+| where Timestamp > cutoff and Quality == "good"
+| join kind=inner (AlertThresholds) on SensorType
+| where Value > CriticalHigh or Value < CriticalLow
+| project Timestamp, Zone, SensorType, Value, Unit,
+          Threshold = iff(Value > CriticalHigh, strcat("> ", tostring(CriticalHigh)),
+                                                  strcat("< ", tostring(CriticalLow))),
+          Severity = "Critical"
+| union (
+    EquipmentTelemetry
+    | where Timestamp > cutoff and Quality == "good"
+    | where (SensorType == "hydraulic_psi" and Value < 1500)
+         or (SensorType == "engine_temp_c" and Value > 105)
+    | project Timestamp, Zone, SensorType, Value,
+              Unit = iff(SensorType == "hydraulic_psi", "PSI", "°C"),
+              Threshold = iff(SensorType == "hydraulic_psi", "< 1500", "> 105"),
+              Severity = "Critical"
+)
+| order by Timestamp desc;

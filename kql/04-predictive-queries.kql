@@ -1,0 +1,286 @@
+// =============================================================================
+// Mining Real-Time Intelligence — Predictive & Advanced Analytics Queries
+// These use KQL's built-in time-series ML functions for forecasting,
+// anomaly detection, trend decomposition, and failure prediction.
+//
+// NOTE: Queries 4 (RUL) and 7 (Belt Wear) use a 7-day lookback window.
+// In a fresh demo environment, run the simulator for at least 1-2 hours
+// before expecting meaningful results. For best demo impact, adjust the
+// lookback to match your available data: e.g., change "7d" to "2h".
+// =============================================================================
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  1. ENGINE TEMPERATURE FORECAST (series_decompose_forecast)              ║
+// ║  Predicts engine temp 2 hours into the future per truck.                ║
+// ║  Helps engineers see which trucks are trending toward overheat.          ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+let forecast_points = 24;  // 24 x 5-min bins = 2 hours ahead
+EquipmentTelemetry
+| where SensorType == "engine_temp_c"
+    and EquipmentType == "haul_truck"
+    and Timestamp > ago(12h)
+    and Quality == "good"
+| make-series AvgTemp = avg(Value) default = real(null)
+    on Timestamp from ago(12h) to now() + 2h step 5m
+    by EquipmentId
+| extend (ForecastTemp, MinTemp, MaxTemp) = series_decompose_forecast(AvgTemp, forecast_points)
+| project EquipmentId, Timestamp, AvgTemp, ForecastTemp, MinTemp, MaxTemp
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  2. VIBRATION ANOMALY SCORING (series_decompose_anomalies)              ║
+// ║  ML-based anomaly detection with severity score per reading.            ║
+// ║  More accurate than static 3σ — adapts to seasonal/trend components.    ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+EquipmentTelemetry
+| where SensorType == "vibration_mm_s"
+    and EquipmentType == "conveyor"
+    and Timestamp > ago(24h)
+    and Quality == "good"
+| make-series VibrationSeries = avg(Value) default = real(null)
+    on Timestamp from ago(24h) to now() step 1m
+    by EquipmentId
+| extend (AnomalyFlags, AnomalyScore, Baseline) = series_decompose_anomalies(VibrationSeries)
+| mv-expand Timestamp to typeof(datetime),
+            VibrationSeries to typeof(real),
+            AnomalyFlags to typeof(int),
+            AnomalyScore to typeof(real),
+            Baseline to typeof(real)
+| where AnomalyFlags != 0
+| project Timestamp, EquipmentId, VibrationValue = round(VibrationSeries, 2),
+          Baseline = round(Baseline, 2), AnomalyScore = round(AnomalyScore, 2),
+          Direction = iff(AnomalyFlags > 0, "Spike", "Drop")
+| order by abs(AnomalyScore) desc
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  3. HYDRAULIC PRESSURE TREND PREDICTION (Linear Regression)             ║
+// ║  Fits a regression line to recent pressure data per drill.              ║
+// ║  Predicts when pressure will cross the 1500 PSI critical threshold.     ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+let critical_psi = 1500.0;
+EquipmentTelemetry
+| where SensorType == "hydraulic_psi"
+    and EquipmentType == "drill"
+    and Timestamp > ago(6h)
+    and Quality == "good"
+| make-series PressureSeries = avg(Value) default = real(null)
+    on Timestamp from ago(6h) to now() step 5m
+    by EquipmentId
+| extend (Slope, Intercept, R2, Variance) = series_fit_line(PressureSeries)
+| extend CurrentPressure = toreal(PressureSeries[-1])
+| extend TrendDirection = iff(Slope < 0, "Declining", "Stable/Rising")
+// Estimate hours until threshold breach (if declining)
+| extend HoursToThreshold = iff(Slope < 0,
+    round((critical_psi - CurrentPressure) / (Slope * 12.0), 1),  // 12 bins/hr at 5m step
+    real(null))
+| project EquipmentId,
+          CurrentPressure = round(CurrentPressure, 0),
+          TrendDirection,
+          SlopePerHour = round(Slope * 12.0, 1),
+          R2 = round(R2, 3),
+          HoursToThreshold,
+          Risk = case(
+              HoursToThreshold between (0.0 .. 2.0), "CRITICAL — breach within 2 hours",
+              HoursToThreshold between (2.0 .. 6.0), "WARNING — breach within 6 hours",
+              Slope < 0, "WATCH — declining trend",
+              "OK")
+| order by HoursToThreshold asc
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  4. REMAINING USEFUL LIFE ESTIMATION (Multi-Sensor Degradation)         ║
+// ║  Combines engine temp trend + oil pressure variance + vibration drift   ║
+// ║  to estimate days until maintenance is required per truck.              ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+let lookback = 7d;
+// Temperature degradation: rising trend = degradation
+let TempTrend = EquipmentTelemetry
+    | where SensorType == "engine_temp_c" and EquipmentType == "haul_truck"
+        and Timestamp > ago(lookback) and Quality == "good"
+    | make-series TempSeries = avg(Value) on Timestamp from ago(lookback) to now() step 1h
+        by EquipmentId
+    | extend (TempSlope, TempIntercept, TempR2, TempVariance) = series_fit_line(TempSeries)
+    | project EquipmentId, TempSlope, TempR2;
+// Oil pressure degradation: increasing variance = degradation
+let OilHealth = EquipmentTelemetry
+    | where SensorType == "oil_pressure_kpa" and EquipmentType == "haul_truck"
+        and Timestamp > ago(lookback) and Quality == "good"
+    | summarize OilStd = stdev(Value), OilMean = avg(Value) by EquipmentId
+    | extend OilCV = OilStd / OilMean;  // coefficient of variation
+// Vibration degradation: rising trend = bearing wear
+let VibTrend = EquipmentTelemetry
+    | where SensorType == "vibration_mm_s" and EquipmentType == "haul_truck"
+        and Timestamp > ago(lookback) and Quality == "good"
+    | make-series VibSeries = avg(Value) on Timestamp from ago(lookback) to now() step 1h
+        by EquipmentId
+    | extend (VibSlope, VibIntercept, VibR2, VibVariance) = series_fit_line(VibSeries)
+    | project EquipmentId, VibSlope, VibR2;
+// Combine into RUL estimate
+TempTrend
+| join kind=leftouter OilHealth on EquipmentId
+| join kind=leftouter VibTrend on EquipmentId
+// Normalise each factor to 0-1 degradation score
+| extend TempDegradation  = min_of(1.0, max_of(0.0, TempSlope * 100.0))
+| extend OilDegradation   = min_of(1.0, max_of(0.0, (OilCV - 0.05) * 10.0))
+| extend VibDegradation   = min_of(1.0, max_of(0.0, VibSlope * 50.0))
+| extend DegradationIndex = round(
+    (TempDegradation * 0.35) + (OilDegradation * 0.35) + (VibDegradation * 0.30), 3)
+// Estimate remaining days (simplified linear model)
+| extend EstimatedRUL_Days = case(
+    DegradationIndex > 0.8, round(3.0 / DegradationIndex, 0),
+    DegradationIndex > 0.5, round(14.0 / DegradationIndex, 0),
+    DegradationIndex > 0.2, round(30.0 / DegradationIndex, 0),
+    real(180))
+| project EquipmentId, DegradationIndex,
+          TempDegradation  = round(TempDegradation, 3),
+          OilDegradation   = round(OilDegradation, 3),
+          VibDegradation   = round(VibDegradation, 3),
+          EstimatedRUL_Days,
+          MaintenancePriority = case(
+              EstimatedRUL_Days <= 7,  "URGENT",
+              EstimatedRUL_Days <= 21, "PLAN",
+              "ROUTINE")
+| order by EstimatedRUL_Days asc
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  5. PRODUCTION FORECAST (series_decompose_forecast)                     ║
+// ║  Forecasts shift-end tonnage based on current rate.                     ║
+// ║  Lets ops manager know whether the shift will hit target.               ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+let shift_target = 5000.0;
+let shift_hours = 8h;
+let forecast_bins = 16;  // remaining bins to forecast (assume mid-shift)
+ProductionMetrics
+| where SensorType == "load_tonnes"
+    and Timestamp > ago(shift_hours)
+    and Quality == "good"
+| make-series TonnageSeries = sum(Value) default = 0.0
+    on Timestamp from ago(shift_hours) to now() + 4h step 30m
+    by EquipmentType
+| extend (ForecastTonnage, Lo, Hi) = series_decompose_forecast(TonnageSeries, forecast_bins)
+// Sum the forecast series to get projected total
+| extend ProjectedTotal = series_sum(ForecastTonnage)
+| extend CurrentTotal = series_sum(TonnageSeries)
+| project EquipmentType,
+          CurrentTonnes = round(CurrentTotal, 0),
+          ProjectedTonnes = round(ProjectedTotal, 0),
+          Target = shift_target,
+          WillMeetTarget = ProjectedTotal >= shift_target,
+          ProjectedPct = round(ProjectedTotal / shift_target * 100, 1)
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  6. GAS LEVEL TREND FORECAST (Early Warning)                            ║
+// ║  Forecasts CO/CH₄ levels 30 min ahead.                                 ║
+// ║  Fires pre-alerts before concentrations actually breach thresholds.     ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+let co_threshold = 35.0;
+let ch4_threshold = 1.0;
+let forecast_points = 6;  // 6 x 5-min = 30 min ahead
+EnvironmentalReadings
+| where SensorType in ("co_ppm", "ch4_pct")
+    and Timestamp > ago(4h)
+    and Quality == "good"
+| make-series GasSeries = avg(Value) default = real(null)
+    on Timestamp from ago(4h) to now() + 30m step 5m
+    by Zone, SensorType
+| extend (Forecast, Lo, Hi) = series_decompose_forecast(GasSeries, forecast_points)
+// Get the max forecasted value in the prediction window
+| extend ForecastedPeak = series_stats_dynamic(Forecast).max
+| extend Threshold = iff(SensorType == "co_ppm", co_threshold, ch4_threshold)
+| where ForecastedPeak > Threshold * 0.8  // alert at 80% of threshold (pre-warning)
+| project Zone, SensorType,
+          CurrentValue = round(toreal(GasSeries[-forecast_points - 1]), 2),
+          ForecastedPeak = round(ForecastedPeak, 2),
+          Threshold,
+          PctOfThreshold = round(ForecastedPeak / Threshold * 100, 1),
+          Risk = case(
+              ForecastedPeak > Threshold, "BREACH PREDICTED within 30 min",
+              ForecastedPeak > Threshold * 0.9, "APPROACHING — within 90% of limit",
+              "ELEVATED — within 80% of limit")
+| order by PctOfThreshold desc
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  7. CONVEYOR BELT WEAR DETECTION (Periodicity + Trend)                  ║
+// ║  Detects changes in vibration periodicity that indicate belt wear,      ║
+// ║  splice damage, or roller degradation.                                  ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+EquipmentTelemetry
+| where SensorType == "vibration_mm_s"
+    and EquipmentType == "conveyor"
+    and Timestamp > ago(7d)
+    and Quality == "good"
+| make-series VibSeries = avg(Value) default = real(null)
+    on Timestamp from ago(7d) to now() step 1m
+    by EquipmentId
+| extend (Periods, PeriodScores) = series_periods_detect(VibSeries, 2.0, 1440.0, 2)
+// Decompose into trend + seasonal + residual
+| extend (Flags, Scores, Baseline) = series_decompose_anomalies(VibSeries)
+// Fit trend line to detect long-term degradation
+| extend (Slope, Intercept, R2, Variance) = series_fit_line(VibSeries)
+| project EquipmentId,
+          DetectedPeriods = Periods,
+          PeriodConfidence = PeriodScores,
+          TrendSlope = round(Slope * 60.0, 4),  // per-hour rate
+          TrendR2 = round(R2, 3),
+          WearIndicator = case(
+              Slope > 0.001,  "DEGRADING — vibration trending upward",
+              Slope < -0.001, "IMPROVING — post-maintenance settling",
+              "STABLE")
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  8. FAILURE PROBABILITY HEATMAP (Multi-Asset Risk Matrix)               ║
+// ║  Scores all equipment on a 0–100 failure probability over 48 hours      ║
+// ║  using recent anomaly density + trend severity.                         ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+let lookback = 24h;
+// Count anomalies per asset in last 24h
+let AnomalyCounts = EquipmentTelemetry
+    | where Timestamp > ago(lookback) and Quality == "good"
+    | make-series ValueSeries = avg(Value) default = real(null)
+        on Timestamp from ago(lookback) to now() step 5m
+        by EquipmentId, SensorType
+    | extend (Flags, Scores, Baseline) = series_decompose_anomalies(ValueSeries)
+    | mv-expand Flags to typeof(int)
+    | where Flags != 0
+    | summarize AnomalyCount = count() by EquipmentId, SensorType
+    | summarize TotalAnomalies = sum(AnomalyCount),
+                SensorTypesAffected = dcount(SensorType)
+      by EquipmentId;
+// Get trend severity per asset
+let TrendSeverity = EquipmentTelemetry
+    | where Timestamp > ago(lookback) and Quality == "good"
+    | where SensorType in ("engine_temp_c", "vibration_mm_s", "hydraulic_psi", "oil_pressure_kpa")
+    | make-series ValueSeries = avg(Value) default = real(null)
+        on Timestamp from ago(lookback) to now() step 10m
+        by EquipmentId, SensorType
+    | extend (Slope, Intercept, R2, Variance) = series_fit_line(ValueSeries)
+    // Negative slope is bad for pressure, positive is bad for temp/vibration
+    | extend BadTrend = case(
+        SensorType in ("engine_temp_c", "vibration_mm_s") and Slope > 0, abs(Slope),
+        SensorType in ("hydraulic_psi", "oil_pressure_kpa") and Slope < 0, abs(Slope),
+        0.0)
+    | summarize MaxBadTrend = max(BadTrend), AvgBadTrend = avg(BadTrend) by EquipmentId;
+// Combine into failure probability
+AnomalyCounts
+| join kind=leftouter TrendSeverity on EquipmentId
+| join kind=leftouter (EquipmentRegistry | project EquipmentId, EquipmentType, Zone) on EquipmentId
+| extend FailureProbability_48h = round(min_of(100.0,
+    (TotalAnomalies * 3.0) +
+    (SensorTypesAffected * 10.0) +
+    (coalesce(MaxBadTrend, 0.0) * 500.0) +
+    (coalesce(AvgBadTrend, 0.0) * 200.0)
+), 0)
+| project EquipmentId, EquipmentType, Zone,
+          FailureProbability_48h,
+          TotalAnomalies, SensorTypesAffected,
+          RiskTier = case(
+              FailureProbability_48h >= 70, "HIGH",
+              FailureProbability_48h >= 40, "MEDIUM",
+              "LOW")
+| order by FailureProbability_48h desc

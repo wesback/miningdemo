@@ -1,0 +1,11 @@
+# Simulator configuration for Mining RTI Demo
+# Copy to config.yaml and edit values as needed.
+
+# Azure Event Hub connection (leave blank for console mode)
+connection_string: ""
+eventhub_name: "mining-sensor-stream"
+
+# Simulation parameters
+interval_sec: 10        # Seconds between each batch of events
+batch_size: 50           # Not used directly — all fleet sensors emit each cycle
+max_iterations: 0        # 0 = run indefinitely; set to e.g. 100 for a bounded demo

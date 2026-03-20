@@ -1,0 +1,57 @@
+// =============================================================================
+// Mining Real-Time Intelligence — Reference Data Seed
+// Run after schema setup to populate lookup tables.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Equipment Registry — 15 demo assets
+// -----------------------------------------------------------------------------
+.ingest inline into table EquipmentRegistry <|
+HT-001,haul_truck,Caterpillar,797F,2019,Zone-A,Active
+HT-002,haul_truck,Caterpillar,797F,2020,Zone-A,Active
+HT-003,haul_truck,Komatsu,980E-5,2021,Zone-B,Active
+HT-004,haul_truck,Komatsu,980E-5,2018,Zone-B,Active
+HT-005,haul_truck,Caterpillar,797F,2022,Zone-C,Active
+CV-001,conveyor,Metso,HB-3200,2017,Zone-A,Active
+CV-002,conveyor,Metso,HB-3200,2018,Zone-B,Active
+CV-003,conveyor,Sandvik,CL400,2020,Zone-C,Active
+DR-001,drill,Epiroc,PV271,2019,Zone-A,Active
+DR-002,drill,Epiroc,PV271,2020,Zone-A,Active
+DR-003,drill,Sandvik,DR412i,2021,Zone-B,Active
+DR-004,drill,Sandvik,DR412i,2022,Zone-C,Active
+ES-001,environmental_sensor,Dräger,X-am8000,2023,Zone-A,Active
+ES-002,environmental_sensor,Dräger,X-am8000,2023,Zone-B,Active
+ES-003,environmental_sensor,Dräger,X-am8000,2023,Zone-C,Active
+
+// -----------------------------------------------------------------------------
+// Alert Thresholds — Regulatory and operational limits
+// -----------------------------------------------------------------------------
+.ingest inline into table AlertThresholds <|
+co_ppm,0,25,0,35,ppm,Carbon monoxide 8-hr TWA (OSHA PEL 50; action level 35)
+ch4_pct,0,0.5,0,1.0,%LEL,Methane lower explosive limit percentage
+ambient_temp_c,10,32,5,35,°C,Wet-bulb globe temperature limits
+vibration_mm_s,0,7.1,0,11.2,mm/s,ISO 10816-3 vibration severity (Group 2)
+hydraulic_psi,1600,4500,1500,5000,PSI,Drill hydraulic system operating range
+engine_temp_c,70,95,60,105,°C,Diesel engine coolant temperature
+oil_pressure_kpa,200,550,150,620,kPa,Engine oil pressure limits
+belt_speed_m_s,0.5,6.0,0,7.0,m/s,Conveyor belt speed operating range
+belt_load_kg_m,0,800,0,1000,kg/m,Conveyor belt linear load density
+humidity_pct,20,80,10,90,%,Relative humidity — high values indicate ventilation issues
+dust_mg_m3,0,5.0,0,10.0,mg/m³,Respirable dust concentration (OSHA PEL 5 mg/m³)
+
+// -----------------------------------------------------------------------------
+// Safety Incidents — Sample historical incidents for correlation queries
+// NOTE: These use fixed dates. After deployment, re-run with recent dates
+// or use this dynamic approach in a KQL Queryset:
+//   .set-or-replace SafetyIncidents <|
+//       datatable(IncidentId:string, Timestamp:datetime, Zone:string,
+//                 Severity:string, Description:string, EquipmentId:string) [
+//           "INC-001", ago(1d) + 9h15m, "Zone-A", "Medium", "Conveyor belt slip", "CV-001",
+//           "INC-002", ago(1d) + 14h42m, "Zone-B", "High", "Elevated CO reading", "ES-002",
+//           "INC-003", ago(2d) + 22h30m, "Zone-C", "Low", "High engine temp", "HT-005"
+//       ]
+// -----------------------------------------------------------------------------
+.ingest inline into table SafetyIncidents <|
+INC-2026-001,2026-03-10T09:15:00Z,Zone-A,Medium,Conveyor belt slip detected on CV-001; production paused 12 min,CV-001
+INC-2026-002,2026-03-10T14:42:00Z,Zone-B,High,Elevated CO reading triggered zone evacuation; ventilation restored in 8 min,ES-002
+INC-2026-003,2026-03-09T22:30:00Z,Zone-C,Low,Haul truck HT-005 reported high engine temp; returned to workshop,HT-005
