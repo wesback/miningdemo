@@ -55,11 +55,10 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+    from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat
     from azure.kusto.ingest import (
         QueuedIngestClient,
         IngestionProperties,
-        DataFormat,
     )
 except ImportError as e:
     print(f"ERROR: azure-kusto-data and azure-kusto-ingest packages required. ({e})")
