@@ -1,0 +1,14 @@
+[
+  {
+    "assignment_id": "miningdemo-alien-001",
+    "universe": "alien",
+    "timestamp": "2026-03-20",
+    "agents": [
+      { "name": "Ripley", "role": "Lead" },
+      { "name": "Parker", "role": "Python Dev" },
+      { "name": "Ash", "role": "Data Engineer" },
+      { "name": "Lambert", "role": "Tester" },
+      { "name": "Dallas", "role": "Fabric Expert" }
+    ]
+  }
+]
