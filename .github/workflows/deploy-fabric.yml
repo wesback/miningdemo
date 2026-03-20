@@ -210,9 +210,8 @@ jobs:
         run: |
           echo "Ingesting historical data into Fabric workspace..."
           
-          # Get cluster URI from deploy.py output or construct from workspace
-          # For now, we'll use the environment variable pattern
-          export FABRIC_CLUSTER_URI="${{ secrets.FABRIC_CLUSTER_URI }}"
+          # Verify kusto packages are installed
+          python -c "from azure.kusto.data import KustoClient; from azure.kusto.ingest import QueuedIngestClient; print('✅ Kusto packages available')"
           
           python simulator/deploy_history.py \
             --skip-generate \

@@ -61,8 +61,8 @@ try:
         IngestionProperties,
         DataFormat,
     )
-except ImportError:
-    print("ERROR: azure-kusto-data and azure-kusto-ingest packages required.")
+except ImportError as e:
+    print(f"ERROR: azure-kusto-data and azure-kusto-ingest packages required. ({e})")
     print("Install: pip install azure-kusto-data azure-kusto-ingest")
     sys.exit(1)
 
