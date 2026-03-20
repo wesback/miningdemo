@@ -22,10 +22,9 @@
 
 // ---------------------------------------------------------------------------
 // COMMAND 2: JSON ingestion mapping for Eventstream / Event Hub
-// NOTE: Ingestion mappings are created with implicit .create-or-alter behavior.
-//       Re-running will update the mapping if it exists. Safe to re-run.
+// NOTE: Use .create-or-alter so re-running updates the mapping if it already exists.
 // ---------------------------------------------------------------------------
-.create table SensorReadings ingestion json mapping "SensorReadingsJsonMapping" '[{"column":"EventId","path":"$.EventId","datatype":"string"},{"column":"EquipmentId","path":"$.EquipmentId","datatype":"string"},{"column":"EquipmentType","path":"$.EquipmentType","datatype":"string"},{"column":"SensorType","path":"$.SensorType","datatype":"string"},{"column":"Value","path":"$.Value","datatype":"real"},{"column":"Unit","path":"$.Unit","datatype":"string"},{"column":"Zone","path":"$.Zone","datatype":"string"},{"column":"Latitude","path":"$.Latitude","datatype":"real"},{"column":"Longitude","path":"$.Longitude","datatype":"real"},{"column":"Timestamp","path":"$.Timestamp","datatype":"datetime"},{"column":"Quality","path":"$.Quality","datatype":"string"},{"column":"Shift","path":"$.Shift","datatype":"string"}]'
+.create-or-alter table SensorReadings ingestion json mapping "SensorReadingsJsonMapping" '[{"column":"EventId","path":"$.EventId","datatype":"string"},{"column":"EquipmentId","path":"$.EquipmentId","datatype":"string"},{"column":"EquipmentType","path":"$.EquipmentType","datatype":"string"},{"column":"SensorType","path":"$.SensorType","datatype":"string"},{"column":"Value","path":"$.Value","datatype":"real"},{"column":"Unit","path":"$.Unit","datatype":"string"},{"column":"Zone","path":"$.Zone","datatype":"string"},{"column":"Latitude","path":"$.Latitude","datatype":"real"},{"column":"Longitude","path":"$.Longitude","datatype":"real"},{"column":"Timestamp","path":"$.Timestamp","datatype":"datetime"},{"column":"Quality","path":"$.Quality","datatype":"string"},{"column":"Shift","path":"$.Shift","datatype":"string"}]'
 
 
 // ---------------------------------------------------------------------------
@@ -154,7 +153,7 @@
 // COMMAND 19: Retention — SensorReadings
 // NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
-.alter table SensorReadings policy retention softdelete = 365d recoverability = enabled
+.alter table SensorReadings policy retention softdelete = 365d
 
 
 // ---------------------------------------------------------------------------
@@ -168,7 +167,7 @@
 // COMMAND 21: Retention — EquipmentTelemetry
 // NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
-.alter table EquipmentTelemetry policy retention softdelete = 365d recoverability = enabled
+.alter table EquipmentTelemetry policy retention softdelete = 365d
 
 
 // ---------------------------------------------------------------------------
@@ -182,7 +181,7 @@
 // COMMAND 23: Retention — EnvironmentalReadings
 // NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
-.alter table EnvironmentalReadings policy retention softdelete = 365d recoverability = enabled
+.alter table EnvironmentalReadings policy retention softdelete = 365d
 
 
 // ---------------------------------------------------------------------------
@@ -196,7 +195,7 @@
 // COMMAND 25: Retention — ProductionMetrics
 // NOTE: .alter replaces the policy. Safe to re-run (idempotent).
 // ---------------------------------------------------------------------------
-.alter table ProductionMetrics policy retention softdelete = 365d recoverability = enabled
+.alter table ProductionMetrics policy retention softdelete = 365d
 
 
 // ---------------------------------------------------------------------------
