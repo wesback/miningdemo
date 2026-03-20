@@ -128,6 +128,107 @@
 
 ---
 
+### 2026-03-20: Complete Dashboard Definition in deploy.py
+**Agent:** Dallas (Fabric Expert)  
+**Type:** Deployment Automation  
+**Status:** Implemented
+
+**Decision:** Expand `build_dashboard_definition()` in `deploy.py` to include **all 18 tiles across 4 pages** as documented in `dashboard/dashboard-config.md`.
+
+**Context:** Gap between documented dashboard specification (18 tiles, 4 pages) and automated deployment (6 tiles, 3 pages).
+
+**Implementation:**
+- All 4 pages: Operations Overview, Safety & Environment, Equipment Health, Production
+- 18 KQL queries inline with dashboard definition
+- Visual types: stat, bar, line, area, scatter, table, map
+- Auto-refresh: 15s to 4h (contextual)
+- Grid layout with x/y/width/height positioning
+- Base64-encoded JSON payload (Fabric REST API)
+
+**Impact:**
+- Automated deployment now matches specification
+- No breaking changes to deployment flow
+- Single source of truth in deploy.py for CI/CD
+
+**Rationale:** Completeness, maintainability, user experience consistency
+
+**Related Files:** `deploy.py`, `dashboard/dashboard-config.md`, `kql/03-queries.kql`
+
+---
+
+### 2026-03-20: GitHub Actions CI/CD Pipeline for Fabric Deployment
+**Agent:** Parker (Python Dev)  
+**Type:** Infrastructure & Automation  
+**Status:** Implemented
+
+**Decision:** Create `.github/workflows/deploy-fabric.yml` — two-job GitHub Actions workflow for automated Fabric deployment with optional historical data ingestion.
+
+**Context:** Wesley requested CI/CD pipeline for automated Fabric deployment with service principal auth, path-based triggers, and optional historical data backfill.
+
+**Architecture:**
+1. **deploy job:** Always runs on trigger; deploys Eventhouse, KQL Database, Eventstream, Queryset, Dashboard (20min timeout)
+2. **historical-data job:** Optional, depends on deploy; chains generate → ingest; 30min timeout
+
+**Triggers:**
+- Push to main (with path filters: deploy.py, kql/**, dashboard/**, simulator/**)
+- Manual trigger via workflow_dispatch (configurable: include_historical bool, history_days number)
+
+**Quality Patterns:**
+- Pre-flight secret validation
+- Exit code tracking and job summaries
+- Concurrency control (one deployment per branch, non-cancellable)
+- Timeouts, artifact preservation, always-run blocks for visibility
+
+**Authentication:** Service principal pattern matching deploy.py (4 secrets)
+
+**Trade-offs:**
+- Separate jobs for cleaner dependency chain and skippable historical data
+- Non-cancellable concurrency prevents partial resource state in Fabric
+- Manual trigger for historical data prevents expensive operations on every push
+
+**Impact:** Automated deployment reduces manual error, clear failure reporting, opt-in historical data management
+
+**Related Files:** `.github/workflows/deploy-fabric.yml`, `deploy.py`, `simulator/deploy_history.py`, `activator/ingest_history.py`
+
+---
+
+### 2026-03-20: Historical Data Pipeline Automation
+**Agent:** Ash (Data Engineer)  
+**Type:** Deployment Automation  
+**Status:** Implemented
+
+**Decision:** Create `simulator/deploy_history.py` — pipeline orchestration script that chains `generate_history.py` → `ingest_history.py` as single operation.
+
+**Context:** Demo previously required multi-step manual workflow (generate CSV, upload, manually ingest via KQL). Error-prone, not CI/CD suitable.
+
+**Implementation:**
+- **Execution modes:**
+  - Full: generate + ingest (default)
+  - Generation-only: `--skip-ingest` (testing)
+  - Ingestion-only: `--skip-generate` (pre-existing data)
+
+- **CI/CD features:**
+  - Semantic exit codes (0=success, 1=config, 2=gen fail, 3=ingest fail, 4=partial)
+  - Dry-run validation mode
+  - Service principal auth chain (CLI args → env vars → DefaultAzureCredential → browser)
+  - CSV file validation (>1KB before ingestion)
+  - Clean stdout for GitHub Actions summaries
+
+- **Credential chain:** Matches deploy.py pattern for consistency
+
+**Rationale:** Developer ergonomics, CI/CD integration, consistency, flexibility
+
+**Impact:** Single command replaces 3-step workflow; CI/CD ready; consistent auth patterns across codebase
+
+**Cross-Team Impact:**
+- Parker: Will invoke from GitHub Actions for optional historical backfill
+- Dallas: Validates CSV compatibility with schema
+- Wesley: Simplified demo setup and data refresh
+
+**Related Files:** `simulator/deploy_history.py`, `simulator/generate_history.py`, `activator/ingest_history.py`
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

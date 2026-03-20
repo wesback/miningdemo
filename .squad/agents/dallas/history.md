@@ -32,3 +32,24 @@
   - Error handling with actionable troubleshooting hints
 - **README Updated:** Step 5b now presents automated script as Option A (recommended), manual Lakehouse/Blob upload as Option B
 - **User Benefit:** Eliminates manual Lakehouse upload + KQL `.ingest` command workflow — single Python command ingests local CSV directly to Fabric
+
+### 2026-03-20 — Complete Dashboard Definition Expansion
+- **Change:** Expanded `deploy.py` dashboard definition from 6 tiles (3 pages) to **18 tiles across 4 pages**
+- **Source:** All tiles extracted from `dashboard/dashboard-config.md` specification
+- **Pages Implemented:**
+  - **Page 1: Operations Overview** — 4 tiles (Active Equipment Count, Shift Tonnage vs Target, Equipment Status Map, Active Alerts)
+  - **Page 2: Safety & Environment** — 4 tiles (Gas Levels by Zone, Temperature Heat Map, Threshold Breaches 24h, Safety Incident Timeline)
+  - **Page 3: Equipment Health** — 4 tiles (Vibration Anomaly Trend, Drill Hydraulic Pressure, Equipment Health Scores, Equipment Utilisation)
+  - **Page 4: Production** — 4 tiles (Conveyor Throughput Trend, Haul Truck Cycle Times, Route Efficiency, 7-Day Production Trend)
+- **Implementation Details:**
+  - Each tile includes proper visual type (stat, bar, line, area, scatter, table, map)
+  - Auto-refresh intervals matched to spec (15s to 4h depending on tile criticality)
+  - KQL queries embedded inline (matches dashboard-config.md exactly)
+  - Named queries referenced where specified (EquipmentHealthScores, RouteEfficiency)
+  - Tile layout positioning added (x/y/width/height grid system)
+- **Pattern:** Dashboard definition remains base64-encoded JSON payload in `build_dashboard_definition()` function
+- **Validation:** Python syntax verified, ready for deployment
+- **CI/CD Integration:** GitHub Actions workflow (`.github/workflows/deploy-fabric.yml`) created by Parker now automatically deploys this complete 18-tile dashboard on every push to main (with path filters for deploy.py, kql/, dashboard/, simulator/)
+- **Key Files:** `deploy.py` (modified), `dashboard/dashboard-config.md` (reference), `kql/03-queries.kql` (named query source)
+
+**Cross-team context:** Parker's CI/CD pipeline ensures Dallas's expanded dashboard definition is deployed automatically. Path filters trigger deployment when dashboard-related files change, reducing manual deployment steps.

@@ -40,3 +40,44 @@
 **Performance:** Generated 175,680 rows (20.4 MB) in ~1.5 seconds vs. previous ~15+ seconds. Progress bar provides user feedback during long-running generation (31-day default creates ~2M rows).
 
 **Decision rationale:** Buffered writes eliminate per-row I/O overhead. Progress bar is essential UX for multi-minute operations. Chose 5,000-row buffer as sweet spot between memory usage and flush frequency.
+
+### 2026-03-20: GitHub Actions CI/CD pipeline for Fabric deployment
+**Files created:**
+- `.github/workflows/deploy-fabric.yml`: Comprehensive CI/CD workflow for automated Fabric deployment and optional historical data ingestion.
+
+**Key architecture decisions:**
+- Two-job design: `deploy` (always runs) + `historical-data` (optional, manual trigger only)
+- Concurrency control prevents simultaneous deployments to same workspace (non-cancellable to avoid partial state)
+- Service principal auth pattern matches deploy.py CLI: all four secrets required (FABRIC_WORKSPACE_ID, AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET)
+- Path filters on push: only triggers on changes to deploy.py, kql/, dashboard/, or simulator/
+- Historical data job uses workflow_dispatch input to control execution (default: false)
+
+**Quality patterns (Lambert influence):**
+- Pre-flight secret validation with actionable error messages showing missing secrets
+- Exit code checking with explicit status tracking via $GITHUB_OUTPUT
+- Job summaries using $GITHUB_STEP_SUMMARY for both success and failure cases
+- Timeout limits: 20min for deploy job, 30min for historical-data job
+- Artifact upload: historical CSVs retained for 7 days as fallback for manual ingestion
+- Always-run summary blocks with conditional content based on success/failure
+- Clear step names explaining each operation (no cryptic "Step 3" labels)
+
+**Dependencies:**
+- Deploy job: azure-identity~=1.15.0, requests~=2.31.0 (minimal, matches deploy.py requirements)
+- Historical job: full simulator/requirements.txt + azure-kusto-data/ingest for CSV ingestion
+- Python 3.10+ with pip cache enabled for faster builds
+
+**Workflow triggers:**
+- Push to main with path filters (auto-deploy on relevant changes)
+- workflow_dispatch with optional inputs: include_historical (boolean), history_days (number, default 31)
+
+**Cross-agent integration:**
+- Ash's `simulator/deploy_history.py` invoked by optional historical-data job
+- Historical job passes `history_days` parameter from workflow input to Ash's script
+- Both scripts use matching service principal auth patterns (CLI args > env vars > DefaultAzureCredential > browser)
+- Historical data pipeline respects generate → ingest sequencing with semantic exit codes
+- Dallas's dashboard expansion (full 18 tiles) now automatically deployed with every CI/CD run
+
+**Cross-agent patterns:**
+- Lambert's testing rigor: validation, summaries, error handling at every step
+- Dallas's operational patterns: clear next steps in success summaries, manual fallback guidance in failure cases
+- Ash's data patterns: historical data pipeline chains generate → ingest with proper error boundaries

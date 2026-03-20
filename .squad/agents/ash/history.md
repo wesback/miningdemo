@@ -16,6 +16,19 @@
 
 **Cross-team context:** Parker simultaneously hardened Python deployment logic (Event Hub retries, config validation, error recovery). Combined improvements ensure the demo is resilient from data generation through deployment.
 
+### 2026-03-20 — Historical data pipeline automation
+- **File:** `simulator/deploy_history.py` — Created unified pipeline script that chains `generate_history.py` → `ingest_history.py` as a single operation. Supports configurable history depth (`--days N`, default 30), interval (`--interval SEC`, default 30), and three execution modes: full pipeline (generate + ingest), generation-only (`--skip-ingest`), and ingestion-only (`--skip-generate`).
+- **Auth pattern:** Follows deploy.py credential chain: CLI args → env vars → DefaultAzureCredential → interactive browser. Service principal support via `--tenant-id`, `--client-id`, `--client-secret` for CI/CD workflows.
+- **CI/CD integration:** Returns semantic exit codes (0=success, 1=config error, 2=generation failure, 3=ingestion failure, 4=partial failure). Dry-run mode (`--dry-run`) validates config and generates data without ingestion.
+- **Pipeline orchestration:** Uses subprocess.run() with check=True for robust error propagation. File validation checks CSV existence and size before ingestion. Clean stdout suitable for GitHub Actions job summaries.
+- **Key insight:** Chaining generation + ingestion removes the manual "generate CSV → upload to portal → run .ingest command" workflow. Parker's GitHub Actions workflow (`.github/workflows/deploy-fabric.yml`) invokes this script on-demand for historical data backfill as optional job triggered via workflow_dispatch.
+
+**Cross-team context:** Integration point with Parker's CI/CD pipeline:
+- Parker's historical-data job calls `simulator/deploy_history.py` with `--days` parameter from workflow input
+- Ash's script matches deploy.py service principal auth pattern (CLI args > env vars > DefaultAzureCredential > browser)
+- Semantic exit codes enable Parker's job summaries to distinguish generation vs. ingestion failures
+- Both teams' work enables automated historical data provisioning during demo environment setup
+
 ### 2026-03-20 — Documentation enhancements for query clarity and schema idempotency
 - **File:** `kql/03-queries.kql` — Rewrote VibrationAnomalies query comment (lines ~46-74) with comprehensive documentation explaining the z-score anomaly detection method, output format, and use case. Replaced terse one-liner with structured technical explanation covering: what it does, detection method (3σ threshold on 15-min rolling stats), output columns, and when to use for real-time monitoring.
 - **File:** `kql/01-schema-setup.kql` — Completed idempotency documentation for ALL 26 commands. Added inline NOTE comments to every create/alter statement specifying idempotency behavior: `.create` (fails on re-run, suggests `.create-merge`), `.create-or-alter` (safe to re-run), `.alter` policy commands (idempotent), ingestion mappings (implicit create-or-alter). Header already documented overall behavior (lines 6-12).
