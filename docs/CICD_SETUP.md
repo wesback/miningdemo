@@ -106,8 +106,7 @@ Save the output — you'll need these values for GitHub Secrets.
 
 1. Open [app.fabric.microsoft.com](https://app.fabric.microsoft.com)
 2. Navigate to your workspace (e.g., `MiningRTI-Demo`)
-3. Click the workspace name → **Workspace settings** (gear icon)
-4. Click **Manage access**
+3. Click the **Manage access** button in the workspace toolbar
 5. Click **+ Add people or groups**
 6. Search for your service principal name (e.g., `mining-rti-deploy`)
 7. Select the service principal
@@ -406,10 +405,10 @@ Common issues and their solutions:
 | Issue | Possible Cause | Solution |
 |-------|----------------|----------|
 | **401 Unauthorized** | Service principal secret expired or incorrect | Regenerate the client secret in Azure Portal → App registrations → Certificates & secrets, then update the `AZURE_CLIENT_SECRET` GitHub secret |
-| **403 Forbidden** | Service principal not added to Fabric workspace | Add the SP to the workspace: Workspace settings → Manage access → Add the SP as Contributor or Admin |
+| **403 Forbidden** | Service principal not added to Fabric workspace | Add the SP to the workspace: Click **Manage access** in the workspace toolbar → Add the SP as Contributor or Admin |
 | **403 Forbidden (API permissions)** | Missing API consent for Fabric | In Azure Portal → App registrations → API permissions → Add `Power BI Service` permission → Grant admin consent |
 | **Invalid tenant error** | Wrong `AZURE_TENANT_ID` | Verify the Tenant ID in Microsoft Entra ID Overview matches the secret value |
-| **SP not in workspace** | Role assignment missing | SPs must be added via **Workspace settings → Manage access**, not just Azure RBAC |
+| **SP not in workspace** | Role assignment missing | SPs must be added via the **Manage access** button in the workspace toolbar, not just Azure RBAC |
 | **Missing secrets in CI** | One or more GitHub secrets not configured | The workflow validation step will list missing secrets. Add them in Settings → Secrets and variables → Actions |
 | **FABRIC_CLUSTER_URI format error** | Incorrect URI format | Must be `https://<guid>.kusto.fabric.microsoft.com` — no trailing slash, no path like `/MiningOps` |
 | **Workspace not found** | Wrong `FABRIC_WORKSPACE_ID` or SP lacks access | Verify the workspace GUID from the URL and that the SP is a workspace member |
