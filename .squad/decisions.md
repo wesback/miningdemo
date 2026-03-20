@@ -346,6 +346,74 @@ if row_count > baseline_count:  # ← Correct: verifies delta
 
 ---
 
+### 2026-03-20: Fabric REST API Resilience Hardening
+**Agent:** Dallas (Fabric Expert)  
+**Type:** API Hardening / Bug Fix  
+**Status:** Implemented
+
+**Decision:** Audit and harden `deploy.py` Fabric/Kusto REST API handling. Apply 8 defensive fixes to eliminate race conditions, improve pagination, and handle inconsistent Fabric API behavior.
+
+**Context:** Following Bug 1 & Bug 2 patches, perform comprehensive audit of API integration patterns — especially async item creation (202 polling), pagination in list endpoints, and error handling.
+
+**Research Findings:**
+- Fabric returns 200/201/202 (inconsistent across item types and regions)
+- 202 async operations require `GET {location}/result` after `Succeeded` to retrieve item ID
+- Polling responses provide `Retry-After` header that must be re-read per poll
+- List endpoints use `continuationUri` for pagination; no token = last page
+- Unknown terminal statuses should trigger immediate break (not poll to timeout)
+
+**Fixes Implemented:**
+
+1. **Issue 1 (HIGH):** `_wait_for_operation()` now calls `/result` endpoint after poll completion, with fallback to name-based lookup
+   - Lines 151–172: GET {location}/result → extract id from response body
+   - Risk mitigation: Eliminates race condition with list API visibility window
+
+2. **Issue 2 (HIGH):** `get_item_by_name()` now loops through paginated results
+   - Lines 203–212: Follow `continuationUri` until exhausted
+   - Impact: Finds items in workspaces with >100 existing items
+
+3. **Issue 3 (MEDIUM):** Re-read `Retry-After` header on each poll response
+   - Lines 149, 154–156: Per-poll header extraction
+   - Benefit: Respects server backoff signaling
+
+4. **Issue 4 (MEDIUM):** Network exception handling during polling
+   - Line 156: try/except ConnectionError/Timeout/RequestException
+   - Benefit: Tolerates transient network glitches (one poll miss ≠ failure)
+
+5. **Issue 5 (MEDIUM):** Explicit unknown status handling
+   - Lines 159–169: `Running`/`NotStarted` → continue; others → break immediately
+   - Benefit: Avoid 5-minute timeout waste on unknown terminal states
+
+6. **Issue 6 (MEDIUM):** HTTP 200 response handling
+   - Lines 184–201: `if resp.status_code in (200, 201):`
+   - Benefit: Future-proofs against API changes; some endpoints may return 200
+
+7. **Issue 7 (MEDIUM):** Trailing slash sanitization on `cluster_uri`
+   - Lines 111, 424: `cluster_uri.rstrip("/")`
+   - Impact: Prevents malformed URLs (`https://cluster//v1/rest/mgmt`)
+
+8. **Issue 8 (LOW):** Defensive key access in logging
+   - Line 210: `item.get("id", "?")` instead of `item["id"]`
+   - Benefit: Prevents KeyError on malformed Fabric responses
+
+**Non-Breaking Changes:** All fixes are defensive; no changes to API contract or behavior in normal case.
+
+**Impact:**
+- Async item creation now reliable across Fabric API inconsistencies
+- Pagination prevents silent failures in complex workspaces
+- Network transients no longer crash deployments
+- Deployment script significantly more resilient
+
+**Related Files:** `deploy.py` (1119 lines), audit included `deploy_history.py` and `ingest_history.py` (no changes needed — use Kusto SDK)
+
+**Cross-Team Notes:**
+- Lambert (Tester): Test coverage should include 202 → /result flow and pagination edge cases
+- Parker (Python Dev): Network exception pattern now available for reuse
+- Ripley (Lead): Deployment reliability improved; handles edge cases in inconsistent Fabric API
+- Ash (Data Engineer): Pagination pattern useful for future Fabric list API work
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus
