@@ -71,3 +71,29 @@
 
 **Testing:** All fields traced through code to verify actual usage vs documentation.
 
+---
+
+### 2026-03-20: Fixed Anomaly Name Documentation Errors
+
+**Context:** CONFIG_SCHEMA.md contained incorrect anomaly scenario names that didn't match the actual code in simulator.py.
+
+**Issues Found and Fixed:**
+1. `engine` → corrected to `overheat` (matches ANOMALY_SCENARIOS dict line 383)
+2. `hydraulics` → corrected to `hydraulic` (matches ANOMALY_SCENARIOS dict line 379)
+3. `conveyor_stop` → added to documentation (was missing, defined in ANOMALY_SCENARIOS line 387)
+
+**Source of Truth:**
+- `simulator.py` lines 370-391: ANOMALY_SCENARIOS dictionary defines all valid anomaly types
+- Valid scenarios: `gas`, `vibration`, `hydraulic`, `overheat`, `conveyor_stop`, `all`
+
+**Key Files:**
+- `simulator/CONFIG_SCHEMA.md`: Lines 124-133 (anomaly scenarios section) - now corrected
+- `simulator/simulator.py`: Lines 370-391 (ANOMALY_SCENARIOS definition)
+
+**Verification Method:**
+- Read full ANOMALY_SCENARIOS dict from simulator.py
+- Cross-referenced every anomaly name in CONFIG_SCHEMA.md
+- Confirmed all 6 valid scenarios now documented correctly
+
+**Impact:** Users referencing the schema will now use correct anomaly names that actually work with `--inject-anomaly` flag.
+

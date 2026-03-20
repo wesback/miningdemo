@@ -229,6 +229,123 @@
 
 ---
 
+### 2026-03-20: GitHub Workflow Historical Data Fix
+**Agent:** Parker (Python Dev)  
+**Type:** Bug Fix / Security Improvement  
+**Status:** Implemented
+
+**Decision:** Replace the broken `ingest_history.py` call in `.github/workflows/deploy-fabric.yml` with `simulator/deploy_history.py --skip-generate`.
+
+**Problem:** The workflow was calling `activator/ingest_history.py` with `--workspace-id` and `--csv-path` flags that don't exist in the script's CLI interface, causing immediate failure.
+
+**Solution:** Use `deploy_history.py --skip-generate` which:
+- Provides proper orchestration layer for CI/CD
+- Has explicit ingest-only mode via `--skip-generate` flag
+- Uses correct credential arguments matching deploy.py patterns
+- Internally invokes `ingest_history.py` with correct arguments
+
+**Additional Changes:**
+1. Removed workspace IDs from all step summaries (security fix)
+2. Added pre-flight validation for `FABRIC_CLUSTER_URI` secret
+
+**New Secret Required:** `FABRIC_CLUSTER_URI` (Kusto cluster URI format: `https://<cluster-name>.kusto.fabric.microsoft.com`)
+
+**Trade-offs:**
+- Adds one more secret to configure
+- Slightly more complex call chain
+
+**Cross-Team Impact:**
+- **Ash:** deploy_history.py now used as intended in CI/CD
+- **Dallas:** Workflow matches documented credential patterns
+- **Lambert:** Added pre-flight secret validation pattern
+
+**Impact:** Correct CLI usage, better abstraction, consistent auth patterns, security improvement
+
+---
+
+### 2026-03-20: Baseline Comparison Pattern for Incremental Operation Verification
+**Agent:** Dallas (Fabric Expert)  
+**Type:** Code Pattern / Best Practice  
+**Status:** Implemented
+
+**Decision:** Establish **baseline-then-compare** as the standard pattern for all incremental operation verification.
+
+**Problem:** The ingestion verification in `activator/ingest_history.py` used a naive `row_count > 0` check that passed immediately if the target table already had rows from previous runs, masking failed ingestions.
+
+**Solution:** Implement three-step verification pattern:
+1. Capture baseline state BEFORE operation (e.g., row count)
+2. Execute operation
+3. Re-capture state AFTER operation and compare to baseline
+
+**Implementation Example (ingest_history.py):**
+```python
+# Capture baseline BEFORE ingestion
+baseline_count = get_count(...)
+log.info(f"Baseline row count: {baseline_count:,}")
+
+# Perform ingestion
+# ... ingest CSV ...
+
+# Verify delta
+row_count = get_count(...)
+if row_count > baseline_count:  # ← Correct: verifies delta
+    log.info(f"Rows added: {row_count - baseline_count:,}")
+```
+
+**Applicability:** Any verification where operations are incremental and pre-existing state may mask operation failure:
+- CSV/data ingestion → verify row count delta
+- Queue processing → verify queue depth reduction
+- File generation → verify new file count
+- Batch updates → verify affected row count
+- Log archival → verify archive size delta
+
+**Cross-Team Impact:**
+- **Ash:** Pattern applicable throughout data pipelines
+- **Parker:** Reusable pattern for Python scripts
+- **Lambert:** Use pattern in integration tests for idempotent operations
+
+**Recommendation:** Adopt as standard pattern across Mining RTI Demo codebase for all incremental operation verification.
+
+---
+
+### 2026-03-20: Simulator Code as Source of Truth for Anomaly Names
+**Agent:** Lambert (Tester)  
+**Type:** Documentation / Governance  
+**Status:** Resolved
+
+**Decision:** The `ANOMALY_SCENARIOS` dictionary in `simulator.py` (lines 370-391) is the authoritative source of truth for valid anomaly scenario names.
+
+**Problem:** `simulator/CONFIG_SCHEMA.md` listed incorrect anomaly names that didn't match the actual implementation:
+- Doc said `engine`, code defines `overheat`
+- Doc said `hydraulics`, code defines `hydraulic`
+- Doc was missing `conveyor_stop` entirely
+
+**Rationale:**
+- The code is what executes — documentation can't override runtime behavior
+- CLI argument parser uses `choices=list(ANOMALY_SCENARIOS.keys())`, so only code-defined names are valid
+- Documentation errors cause user confusion and CLI failures
+
+**Action Taken:** Corrected all anomaly names in CONFIG_SCHEMA.md to match simulator.py exactly:
+- `overheat` (not engine)
+- `hydraulic` (not hydraulics)
+- `conveyor_stop` (now documented)
+- `vibration` ✓
+- `gas` ✓
+- `all` ✓
+
+**Team Guidance:**
+- Always verify variable names, enum values, CLI choices against actual code
+- If code and docs conflict, fix the docs (unless there's a code bug)
+- Anomaly scenario changes require updates to both `ANOMALY_SCENARIOS` dict AND CONFIG_SCHEMA.md
+
+**Testing Guidance:**
+- Test cases must use the 6 valid scenario names from code
+- Any anomaly injection tests using old names will fail
+
+**Impact:** Reduced user support burden, clearer onboarding, eliminates CLI errors from documentation drift
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

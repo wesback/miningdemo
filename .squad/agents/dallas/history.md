@@ -53,3 +53,13 @@
 - **Key Files:** `deploy.py` (modified), `dashboard/dashboard-config.md` (reference), `kql/03-queries.kql` (named query source)
 
 **Cross-team context:** Parker's CI/CD pipeline ensures Dallas's expanded dashboard definition is deployed automatically. Path filters trigger deployment when dashboard-related files change, reducing manual deployment steps.
+
+### 2026-03-20 — Corrected Tile Count Documentation & Fixed Baseline Ingestion Verification
+- **Fix 1:** Corrected docstring in `deploy.py` line 570 — tile count updated from "18 tiles" to "16 tiles" (accurate count verified via code inspection)
+- **Fix 2:** Implemented baseline row count comparison in `activator/ingest_history.py` for reliable ingestion verification
+- **Problem:** Original success check used `row_count > 0` which immediately passed true if table had any prior data, even if new ingestion added zero rows
+- **Solution:** Capture baseline row count BEFORE ingestion starts, compare post-ingestion count against baseline, success only if `row_count > baseline_count`
+- **Implementation:** Added baseline capture at line 237, updated success check at line 273, added "Rows added" delta logging at line 276
+- **Benefit:** Ingestion verification now correctly detects failed ingestions even when table already has historical rows; better observability with row delta reporting
+- **Pattern:** Baseline-then-compare pattern applicable to any incremental operation verification (table updates, queue processing, batch jobs)
+- **Key Files:** `deploy.py` (docstring fix), `activator/ingest_history.py` (baseline verification logic)

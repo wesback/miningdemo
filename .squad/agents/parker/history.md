@@ -81,3 +81,49 @@
 - Lambert's testing rigor: validation, summaries, error handling at every step
 - Dallas's operational patterns: clear next steps in success summaries, manual fallback guidance in failure cases
 - Ash's data patterns: historical data pipeline chains generate → ingest with proper error boundaries
+
+### 2026-03-20: Critical fix for historical-data workflow job
+**Files changed:**
+- `.github/workflows/deploy-fabric.yml`: Fixed historical-data job to call correct script with correct arguments; removed workspace ID security leaks
+
+**Issue:** The historical-data job incorrectly called `activator/ingest_history.py` with wrong arguments (`--workspace-id`, `--csv-path`). The ingest_history.py script expects `--cluster`, `--csv`, `--table` and doesn't know about workspace IDs. This would fail immediately on execution.
+
+**Root cause:** Mismatch between workflow assumptions and actual script CLI interface. Workflow was designed before `simulator/deploy_history.py` was created by Ash.
+
+**Solution (Option B):** Replace broken `ingest_history.py` call with `simulator/deploy_history.py --skip-generate`. This script:
+- Orchestrates the full pipeline (generate + ingest)
+- Has `--skip-generate` flag for ingest-only mode (perfect for CI/CD where CSV is already generated)
+- Uses same service principal auth pattern as deploy.py
+- Calls `ingest_history.py` internally with correct arguments
+- Has semantic exit codes for CI/CD error handling
+
+**Changes:**
+1. **Ingest step rewrite:**
+   - Changed from: `python activator/ingest_history.py --workspace-id ... --csv-path ...`
+   - Changed to: `python simulator/deploy_history.py --skip-generate --cluster ... --database MiningOps --tenant-id ... --client-id ... --client-secret ...`
+   - Maps all four service principal secrets correctly (tenant-id, client-id, client-secret)
+   - Requires new secret: `FABRIC_CLUSTER_URI` (Kusto cluster URI like https://cluster.kusto.fabric.microsoft.com)
+
+2. **Security fix - removed workspace ID leaks:**
+   - Line 75: Removed workspace ID from deployment start message
+   - Line 104: Removed workspace ID from success summary
+   - Line 123: Removed workspace ID from failure summary
+   - Workspace IDs are sensitive identifiers and should not appear in persistent GitHub Actions logs
+
+3. **Added secret validation:**
+   - New "Validate historical data secrets" step before generation
+   - Validates FABRIC_CLUSTER_URI, AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+   - Provides actionable error message if any secret is missing
+
+**Rationale:**
+- deploy_history.py is the correct abstraction for CI/CD (orchestration layer)
+- Avoids exposing ingest_history.py's internal implementation details to workflow
+- Consistent auth patterns across all Python scripts
+- --skip-generate flag is explicitly designed for this use case
+
+**Cross-team impact:**
+- Ash: deploy_history.py now integrated into CI/CD pipeline as intended
+- Dallas: Workflow now matches documented credential patterns
+- Lambert: Added pre-flight validation for historical data secrets
+
+**Related decisions:** See `.squad/decisions/inbox/parker-workflow-fix.md` for team review
