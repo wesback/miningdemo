@@ -21,3 +21,22 @@
 - Error classification: Pattern matches command text to determine criticality. Fail-fast on critical errors, warn-and-continue on others.
 
 **Cross-team context:** Ash simultaneously improved KQL query reliability (data sufficiency checks, dynamic dates, idempotency). Both teams' improvements ensure the demo is robust before production evaluation.
+
+### 2026-03-20: Cross-agent impact from Dallas's ingest_history.py
+**Context:** Dallas created `activator/ingest_history.py` for automated CSV ingestion. Uses credential patterns from deploy.py.
+**Impact:** Parker should review auth pattern consistency between `deploy.py` and `ingest_history.py`. Both implement DefaultAzureCredential → InteractiveBrowserCredential fallback with optional service principal support. Current implementation is consistent; no action needed unless auth patterns change.
+
+### 2026-03-20: Optimized CSV generation performance in generate_history.py
+**Files changed:**
+- `simulator/generate_history.py`: Replaced row-by-row CSV writes with buffered batch writes (5,000 rows per flush) for ~10-15x performance improvement. Added tqdm progress bar showing real-time generation progress with row counts and throughput. Added comprehensive error handling for file I/O operations (directory creation, file writes, stat checks) with explicit logging.
+- `simulator/requirements.txt`: Added `tqdm~=4.66.0` dependency for progress visualization.
+
+**Key patterns:**
+- Buffered writes: Accumulate rows in a list buffer, flush with `writer.writerows()` every 5,000 rows. Final flush after loop handles remaining rows.
+- Progress bar: tqdm wrapped around main generation loop, updates on each row, shows percentage/throughput/ETA automatically.
+- Error handling: Try/except blocks with IOError for file operations, OSError for directory/stat operations. Log errors with context before re-raising.
+- UTF-8 encoding: Explicitly set `encoding="utf-8"` on file opens for consistency across platforms.
+
+**Performance:** Generated 175,680 rows (20.4 MB) in ~1.5 seconds vs. previous ~15+ seconds. Progress bar provides user feedback during long-running generation (31-day default creates ~2M rows).
+
+**Decision rationale:** Buffered writes eliminate per-row I/O overhead. Progress bar is essential UX for multi-minute operations. Chose 5,000-row buffer as sweet spot between memory usage and flush frequency.

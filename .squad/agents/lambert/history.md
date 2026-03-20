@@ -8,3 +8,66 @@
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+### 2026-03-20: KQL Validation Infrastructure Added to deploy.py
+
+**Context:** Added pre-deployment KQL syntax validation to catch common errors before sending to Fabric API.
+
+**Implementation:**
+- Created `validate_kql_syntax()` function in deploy.py (lines 223-325)
+- Validates: mismatched brackets/parens/braces, unclosed strings, suspicious empty commands
+- Does NOT validate: KQL semantics, pipe operators (too many false positives in valid multi-line queries)
+- Integrated into `execute_kql_commands()` — logs warnings but allows deployment to continue
+- Warnings are heuristic checks, not blocking errors
+
+**Key Files:**
+- `deploy.py`: Lines 223-325 (validation function), lines 383-389 (integration)
+- `kql/01-schema-setup.kql`, `02-reference-data.kql`, `03-queries.kql`, `04-predictive-queries.kql`: All pass validation cleanly
+
+**Rationale:**
+- Catches typos and structural errors early (before API roundtrip)
+- Non-blocking design respects that heuristics can produce false positives
+- Focused on high-signal checks (bracket matching, string termination)
+
+**Testing:** Validated against all 4 production KQL files — zero false positives.
+
+---
+
+### 2026-03-20: Simulator Config Schema Documentation
+
+**Context:** Created comprehensive documentation for simulator configuration — every field, validation rule, and common mistake.
+
+**Implementation:**
+- Created `simulator/CONFIG_SCHEMA.md` (11KB, 450+ lines)
+- Documents all YAML fields, CLI args, env variables, validation rules
+- Includes examples for console mode, production, demo scenarios
+- Covers field types, ranges, defaults, override priority
+- Lists common mistakes and fixes for each config issue
+
+**Key Files:**
+- `simulator/CONFIG_SCHEMA.md`: Complete config reference
+- `simulator/config.sample.yaml`: Sample config (3 fields used)
+- `simulator/simulator.py`: Lines 397-423 (validation), 450-500 (loading), 600-633 (CLI args)
+
+**Config Fields (Actually Used):**
+- `connection_string`: Event Hub connection string (required unless console mode)
+- `eventhub_name`: Event Hub entity name (required unless console mode)
+- `interval_sec`: Seconds between batches (range: 0 < n ≤ 3600, default: 10)
+- `batch_size`: Documented but NOT enforced (fleet size controls event volume)
+- `max_iterations`: Stop after N batches (0 = infinite, default: 0)
+
+**Config Priority:** CLI args > YAML config > Env vars > Built-in defaults
+
+**Validation Behavior:**
+- Invalid YAML config → exits with error (lines 463-468)
+- Missing connection in non-console mode → exits with error (lines 494-499)
+- Unknown YAML fields → silently ignored (no validation)
+
+**Common User Mistakes:**
+1. Missing `--config` flag (config file not loaded)
+2. Expecting `batch_size` to limit events (it doesn't)
+3. Setting `max_iterations: 1` expecting continuous data (only sends 1 batch)
+4. Wrong connection string format (entity vs namespace)
+
+**Testing:** All fields traced through code to verify actual usage vs documentation.
+

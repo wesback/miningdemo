@@ -15,3 +15,9 @@
 - **Key insight:** KQL queries should be self-documenting about data requirements. Time-series ML functions (series_decompose_anomalies, series_fit_line, series_periods_detect) need sufficient historical data to produce meaningful results — checking this upfront improves demo reliability.
 
 **Cross-team context:** Parker simultaneously hardened Python deployment logic (Event Hub retries, config validation, error recovery). Combined improvements ensure the demo is resilient from data generation through deployment.
+
+### 2026-03-20 — Documentation enhancements for query clarity and schema idempotency
+- **File:** `kql/03-queries.kql` — Rewrote VibrationAnomalies query comment (lines ~46-74) with comprehensive documentation explaining the z-score anomaly detection method, output format, and use case. Replaced terse one-liner with structured technical explanation covering: what it does, detection method (3σ threshold on 15-min rolling stats), output columns, and when to use for real-time monitoring.
+- **File:** `kql/01-schema-setup.kql` — Completed idempotency documentation for ALL 26 commands. Added inline NOTE comments to every create/alter statement specifying idempotency behavior: `.create` (fails on re-run, suggests `.create-merge`), `.create-or-alter` (safe to re-run), `.alter` policy commands (idempotent), ingestion mappings (implicit create-or-alter). Header already documented overall behavior (lines 6-12).
+- **Pattern:** KQL schema scripts should document re-run semantics inline at each command — this prevents confusion during iterative development and makes manual execution safer. Query comments should explain the statistical/analytical method, not just the business use case.
+- **Key insight:** Idempotency documentation serves two audiences: automated deployment (deploy.py) and manual operators. Inline comments clarify which failures are expected vs. problematic, and guide safe manual re-execution strategies.
