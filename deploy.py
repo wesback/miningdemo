@@ -578,40 +578,97 @@ def execute_kql_commands(cluster_uri: str, database: str, kusto_token: str, kql_
 # ---------------------------------------------------------------------------
 # Item Definitions (Base64-encoded JSON payloads)
 # ---------------------------------------------------------------------------
+def _parse_production_queries(text: str) -> list[tuple[str, str]]:
+    """Parse 03-queries.kql into (name, body) pairs using ``// Query: Name`` markers."""
+    import re as _re
+    pattern = r'// Query:\s*(\w+)\s*\n'
+    markers = [(m.group(1), m.end()) for m in _re.finditer(pattern, text)]
+    queries: list[tuple[str, str]] = []
+    for i, (name, start) in enumerate(markers):
+        if i + 1 < len(markers):
+            next_section = text.rfind('// ----', start, markers[i + 1][1])
+            end = next_section if next_section > 0 else markers[i + 1][1]
+        else:
+            end = len(text)
+        body = text[start:end].strip()
+        body = _re.split(r'\n// ╔[═]+╗', body)[0].strip()
+        body = _re.split(r'\n// [-]{10,}\n// US-', body)[0].strip()
+        body = body.rstrip(';').strip()
+        if body and not all(ln.strip().startswith('//') or not ln.strip() for ln in body.splitlines()):
+            queries.append((name, body))
+    return queries
+
+
+def _parse_predictive_queries(text: str) -> list[tuple[str, str]]:
+    """Parse 04-predictive-queries.kql using box-drawing headers."""
+    import re as _re
+    blocks = _re.split(r'// ╔[═]+╗', text)
+    queries: list[tuple[str, str]] = []
+    for block in blocks[1:]:
+        title_match = _re.search(r'║\s+\d+\.\s+(.+?)(?:\s+║)', block)
+        if not title_match:
+            continue
+        title = title_match.group(1).strip()
+        body_match = _re.search(r'// ╚[═]+╝\s*\n(.*)', block, _re.DOTALL)
+        body = body_match.group(1).strip() if body_match else ''
+        if body:
+            queries.append((title, body))
+    return queries
+
+
 def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]:
-    """Build the KQL Queryset definition with all query tabs."""
-    # Load queries from the KQL files
+    """Build the KQL Queryset definition with one tab per named query.
+
+    Parses individual queries from the KQL files so each gets its own
+    tab in the Fabric KQL Queryset — easier to navigate during demos.
+    """
     queries_file = PROJECT_ROOT / "kql" / "03-queries.kql"
     predictive_file = PROJECT_ROOT / "kql" / "04-predictive-queries.kql"
 
-    queries_content = queries_file.read_text() if queries_file.exists() else "// No queries found"
-    predictive_content = predictive_file.read_text() if predictive_file.exists() else "// No predictive queries"
+    tabs: list[dict[str, str]] = []
+    ds_id = "mining-ops-source"
+
+    if queries_file.exists():
+        for name, body in _parse_production_queries(queries_file.read_text()):
+            tabs.append({
+                "id": f"tab-{name}",
+                "content": body,
+                "title": name,
+                "dataSourceId": ds_id,
+            })
+
+    if predictive_file.exists():
+        for title, body in _parse_predictive_queries(predictive_file.read_text()):
+            slug = title.split("(")[0].strip().replace(" ", "")
+            tabs.append({
+                "id": f"tab-pred-{slug}",
+                "content": body,
+                "title": f"[Predictive] {title}",
+                "dataSourceId": ds_id,
+            })
+
+    if not tabs:
+        tabs.append({
+            "id": "tab-empty",
+            "content": "// No queries found — check kql/ directory",
+            "title": "Empty",
+            "dataSourceId": ds_id,
+        })
+
+    log.info("  KQL Queryset: %d individual query tabs", len(tabs))
 
     queryset_json = {
         "queryset": {
             "version": "1.0.0",
             "dataSources": [
                 {
-                    "id": "mining-ops-source",
+                    "id": ds_id,
                     "clusterUri": cluster_uri,
                     "type": "AzureDataExplorer",
                     "databaseName": database,
                 }
             ],
-            "tabs": [
-                {
-                    "id": "tab-main-queries",
-                    "content": queries_content,
-                    "title": "Production Queries",
-                    "dataSourceId": "mining-ops-source",
-                },
-                {
-                    "id": "tab-predictive",
-                    "content": predictive_content,
-                    "title": "Predictive Analytics",
-                    "dataSourceId": "mining-ops-source",
-                },
-            ],
+            "tabs": tabs,
         }
     }
 
@@ -703,7 +760,7 @@ def build_dashboard_definition(cluster_uri: str, database: str) -> dict[str, Any
     def q(key: str, text: str) -> dict[str, Any]:
         return {
             "id":            q_id[key],
-            "dataSourceId":  ds_id,
+            "dataSource":    {"kind": "KQLDatabase", "dataSourceId": ds_id},
             "text":          text,
             "usedVariables": [],
         }
@@ -816,7 +873,43 @@ EquipmentTelemetry
 | summarize AvgPressure = round(avg(Value), 0) by EquipmentId, bin(Timestamp, 30s)
 | order by Timestamp asc'''),
 
-        q("equipment-health-scores", "EquipmentHealthScores"),
+        q("equipment-health-scores", '''\
+let scoring_window = 4h;
+let temp_weight = 0.35;
+let oil_weight  = 0.35;
+let age_weight  = 0.30;
+// Temperature score: 100 at 80°C, decreasing linearly to 0 at 110°C
+let TempScores = EquipmentTelemetry
+    | where SensorType == "engine_temp_c" and EquipmentType == "haul_truck"
+        and Timestamp > ago(scoring_window) and Quality == "good"
+    | summarize AvgTemp = avg(Value) by EquipmentId
+    | extend TempScore = max_of(0.0, min_of(100.0, (110.0 - AvgTemp) / 0.3));
+// Oil pressure score: 100 at 400 kPa, decreasing toward limits
+let OilScores = EquipmentTelemetry
+    | where SensorType == "oil_pressure_kpa" and EquipmentType == "haul_truck"
+        and Timestamp > ago(scoring_window) and Quality == "good"
+    | summarize AvgOil = avg(Value), StdOil = stdev(Value) by EquipmentId
+    | extend OilScore = max_of(0.0, min_of(100.0, 100.0 - (StdOil / AvgOil) * 200.0));
+// Age score: based on year commissioned from registry
+let AgeScores = EquipmentRegistry
+    | where EquipmentType == "haul_truck"
+    | extend YearsOld = datetime_diff('year', now(), datetime(2026-01-01)) + (2026 - YearCommissioned)
+    | extend AgeScore = max_of(0.0, 100.0 - (YearsOld * 10.0));
+TempScores
+| join kind=leftouter OilScores  on EquipmentId
+| join kind=leftouter AgeScores  on EquipmentId
+| extend HealthScore = round(
+    (coalesce(TempScore, 50.0) * temp_weight) +
+    (coalesce(OilScore, 50.0)  * oil_weight) +
+    (coalesce(AgeScore, 50.0)  * age_weight), 0)
+| extend Tier = case(
+    HealthScore < 40, "Critical",
+    HealthScore < 70, "Warning",
+    "Healthy")
+| project EquipmentId, HealthScore, TempScore = round(coalesce(TempScore, 50.0), 0),
+          OilScore = round(coalesce(OilScore, 50.0), 0),
+          AgeScore = round(coalesce(AgeScore, 50.0), 0), Tier
+| order by HealthScore asc'''),
 
         q("equipment-utilisation", '''\
 let report_day = startofday(ago(1d));
@@ -849,7 +942,26 @@ ProductionMetrics
 | summarize AvgDuration_min = round(avg(PhaseDuration_min), 1)
   by EquipmentId, CyclePhase'''),
 
-        q("route-efficiency", "RouteEfficiency"),
+        q("route-efficiency", '''\
+ProductionMetrics
+| where SensorType == "cycle_state"
+    and EquipmentType == "haul_truck"
+    and Timestamp > ago(24h)
+    and Quality == "good"
+| summarize CycleTime_min = datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0
+  by EquipmentId, Zone, CycleBin = bin(Timestamp, 2h)
+| summarize AvgCycle = avg(CycleTime_min), Cycles = count() by EquipmentId, Zone
+| extend OverallAvg = toscalar(
+    ProductionMetrics
+    | where SensorType == "cycle_state" and EquipmentType == "haul_truck"
+        and Timestamp > ago(24h) and Quality == "good"
+    | summarize CycleTime_min = datetime_diff('second', max(Timestamp), min(Timestamp)) / 60.0
+      by EquipmentId, CycleBin = bin(Timestamp, 2h)
+    | summarize avg(CycleTime_min)
+)
+| extend Efficiency = round(AvgCycle / OverallAvg * 100, 1)
+| extend Flagged = Efficiency > 120
+| order by Efficiency desc'''),
 
         q("production-7d", '''\
 ProductionMetrics
@@ -888,7 +1000,7 @@ ProductionMetrics
             "id":         t_id[key],
             "title":      title,
             "pageId":     page_id[pg],
-            "queryId":    q_id[key],
+            "queryRef":   {"kind": "KQL", "queryId": q_id[key]},
             "visualType": visual,
             "layout":     {"x": x, "y": y, "width": w, "height": h},
         }
@@ -917,6 +1029,8 @@ ProductionMetrics
     ]
 
     dashboard_json = {
+        "schema_version": "52",
+        "title":        "Mining Operations",
         "autoRefresh":  {"enabled": True, "defaultRefreshRate": "30s"},
         "dataSources":  [data_source],
         "pages":        pages,
