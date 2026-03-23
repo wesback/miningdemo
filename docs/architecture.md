@@ -31,8 +31,8 @@ The Python simulator publishes JSON events to an **Azure Event Hub** (or Fabric 
   "Value": 92.4,
   "Unit": "°C",
   "Zone": "Zone-B",
-  "Latitude": -23.7011,
-  "Longitude": 119.8045,
+  "Latitude": 46.4917,
+  "Longitude": -80.9930,
   "Timestamp": "2026-03-11T08:15:32.441Z",
   "Quality": "good",
   "Shift": "day"

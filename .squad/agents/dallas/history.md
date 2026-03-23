@@ -216,3 +216,15 @@ The Fabric API exhibits lenient validation — it accepts malformed payloads (20
 - `validate_fabric_definitions.py`: updated to validate wrapper presence
 
 This lesson transfers to Parker and all future schema work.
+
+## Learnings
+
+### Tutorial Location Update (2026-03-23)
+- **Updated:** `docs/mining-rti-tutorial.md` and `docs/architecture.md`
+- **Change:** Scenario location updated to Ontario, Canada; coordinates aligned with simulator
+- **Details:** 
+  - Changed scenario description from Australia to Ontario, Canada
+  - Updated GPS coordinates to match Ontario simulator site baseline
+  - Tutorial examples now use coordinates consistent with simulator behavior
+- **Rationale:** Alignment with simulator site (Ontario coordinates); ensures tutorial examples match actual simulator behavior
+- **Cross-agent learnings:** Documentation and simulator now reference identical coordinate systems, eliminating discrepancies in location-based calculations

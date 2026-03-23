@@ -6,7 +6,7 @@
 
 ## Scenario
 
-You are a **mining operations engineer** at a fictional Pilbara (Western Australia) iron ore mine.
+You are a **mining operations engineer** at a fictional mine in the Sudbury Basin region of Ontario, Canada.
 The operation runs 24/7 across three zones — **Zone-A, Zone-B, Zone-C** — with a fleet of:
 
 | Equipment | IDs | What we monitor |
@@ -237,8 +237,8 @@ Sample output event:
   "Value": 87.4,
   "Unit": "°C",
   "Zone": "Zone-A",
-  "Latitude": -23.7011,
-  "Longitude": 119.8045,
+  "Latitude": 46.4917,
+  "Longitude": -80.9930,
   "Timestamp": "2026-03-23T09:12:05Z",
   "Quality": "good",
   "Shift": "day"
