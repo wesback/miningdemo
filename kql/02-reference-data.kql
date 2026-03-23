@@ -5,39 +5,49 @@
 
 // -----------------------------------------------------------------------------
 // Equipment Registry — 15 demo assets
+// NOTE: Uses .set-or-replace (idempotent full-replace) so re-running deploy.py
+// does not accumulate duplicate rows. .ingest inline appends on every run.
 // -----------------------------------------------------------------------------
-.ingest inline into table EquipmentRegistry <|
-HT-001,haul_truck,Caterpillar,797F,2019,Zone-A,Active
-HT-002,haul_truck,Caterpillar,797F,2020,Zone-A,Active
-HT-003,haul_truck,Komatsu,980E-5,2021,Zone-B,Active
-HT-004,haul_truck,Komatsu,980E-5,2018,Zone-B,Active
-HT-005,haul_truck,Caterpillar,797F,2022,Zone-C,Active
-CV-001,conveyor,Metso,HB-3200,2017,Zone-A,Active
-CV-002,conveyor,Metso,HB-3200,2018,Zone-B,Active
-CV-003,conveyor,Sandvik,CL400,2020,Zone-C,Active
-DR-001,drill,Epiroc,PV271,2019,Zone-A,Active
-DR-002,drill,Epiroc,PV271,2020,Zone-A,Active
-DR-003,drill,Sandvik,DR412i,2021,Zone-B,Active
-DR-004,drill,Sandvik,DR412i,2022,Zone-C,Active
-ES-001,environmental_sensor,Dräger,X-am8000,2023,Zone-A,Active
-ES-002,environmental_sensor,Dräger,X-am8000,2023,Zone-B,Active
-ES-003,environmental_sensor,Dräger,X-am8000,2023,Zone-C,Active
+.set-or-replace EquipmentRegistry <|
+datatable(EquipmentId:string, EquipmentType:string, Make:string, Model:string, YearCommissioned:int, Zone:string, Status:string) [
+  "HT-001", "haul_truck",            "Caterpillar",        "797F",      2019, "Zone-A", "Active",
+  "HT-002", "haul_truck",            "Caterpillar",        "797F",      2020, "Zone-A", "Active",
+  "HT-003", "haul_truck",            "Komatsu",            "980E-5",    2021, "Zone-B", "Active",
+  "HT-004", "haul_truck",            "Komatsu",            "980E-5",    2018, "Zone-B", "Active",
+  "HT-005", "haul_truck",            "Caterpillar",        "797F",      2022, "Zone-C", "Active",
+  "CV-001", "conveyor",              "Metso",              "HB-3200",   2017, "Zone-A", "Active",
+  "CV-002", "conveyor",              "Metso",              "HB-3200",   2018, "Zone-B", "Active",
+  "CV-003", "conveyor",              "Sandvik",            "CL400",     2020, "Zone-C", "Active",
+  "DR-001", "drill",                 "Epiroc",             "PV271",     2019, "Zone-A", "Active",
+  "DR-002", "drill",                 "Epiroc",             "PV271",     2020, "Zone-A", "Active",
+  "DR-003", "drill",                 "Sandvik",            "DR412i",    2021, "Zone-B", "Active",
+  "DR-004", "drill",                 "Sandvik",            "DR412i",    2022, "Zone-C", "Active",
+  "ES-001", "environmental_sensor",  "Dräger",             "X-am8000",  2023, "Zone-A", "Active",
+  "ES-002", "environmental_sensor",  "Dräger",             "X-am8000",  2023, "Zone-B", "Active",
+  "ES-003", "environmental_sensor",  "Dräger",             "X-am8000",  2023, "Zone-C", "Active"
+]
 
 // -----------------------------------------------------------------------------
 // Alert Thresholds — Regulatory and operational limits
+// NOTE: Uses .set-or-replace (idempotent full-replace) so re-running deploy.py
+// does not accumulate duplicate rows. .ingest inline appends on every run.
+// This is the authoritative fix for the 26x fanout issue (deploy ran 27 times).
+// To clean the live database, run this block directly in a KQL Queryset.
 // -----------------------------------------------------------------------------
-.ingest inline into table AlertThresholds <|
-co_ppm,0,25,0,35,ppm,Carbon monoxide 8-hr TWA (OSHA PEL 50; action level 35)
-ch4_pct,0,0.5,0,1.0,%LEL,Methane lower explosive limit percentage
-ambient_temp_c,10,32,5,35,°C,Wet-bulb globe temperature limits
-vibration_mm_s,0,7.1,0,11.2,mm/s,ISO 10816-3 vibration severity (Group 2)
-hydraulic_psi,1600,4500,1500,5000,PSI,Drill hydraulic system operating range
-engine_temp_c,70,95,60,105,°C,Diesel engine coolant temperature
-oil_pressure_kpa,200,550,150,620,kPa,Engine oil pressure limits
-belt_speed_m_s,0.5,6.0,0,7.0,m/s,Conveyor belt speed operating range
-belt_load_kg_m,0,800,0,1000,kg/m,Conveyor belt linear load density
-humidity_pct,20,80,10,90,%,Relative humidity — high values indicate ventilation issues
-dust_mg_m3,0,5.0,0,10.0,mg/m³,Respirable dust concentration (OSHA PEL 5 mg/m³)
+.set-or-replace AlertThresholds <|
+datatable(SensorType:string, WarningLow:real, WarningHigh:real, CriticalLow:real, CriticalHigh:real, Unit:string, Description:string) [
+  "co_ppm",          0.0,    25.0,   0.0,    35.0,   "ppm",    "Carbon monoxide 8-hr TWA (OSHA PEL 50; action level 35)",
+  "ch4_pct",         0.0,    0.5,    0.0,    1.0,    "%LEL",   "Methane lower explosive limit percentage",
+  "ambient_temp_c",  10.0,   32.0,   5.0,    35.0,   "°C",     "Wet-bulb globe temperature limits",
+  "vibration_mm_s",  0.0,    7.1,    0.0,    11.2,   "mm/s",   "ISO 10816-3 vibration severity (Group 2)",
+  "hydraulic_psi",   1600.0, 4500.0, 1500.0, 5000.0, "PSI",    "Drill hydraulic system operating range",
+  "engine_temp_c",   70.0,   95.0,   60.0,   105.0,  "°C",     "Diesel engine coolant temperature",
+  "oil_pressure_kpa",200.0,  550.0,  150.0,  620.0,  "kPa",    "Engine oil pressure limits",
+  "belt_speed_m_s",  0.5,    6.0,    0.0,    7.0,    "m/s",    "Conveyor belt speed operating range",
+  "belt_load_kg_m",  0.0,    800.0,  0.0,    1000.0, "kg/m",   "Conveyor belt linear load density",
+  "humidity_pct",    20.0,   80.0,   10.0,   90.0,   "%",      "Relative humidity — high values indicate ventilation issues",
+  "dust_mg_m3",      0.0,    5.0,    0.0,    10.0,   "mg/m³",  "Respirable dust concentration (OSHA PEL 5 mg/m³)"
+]
 
 // -----------------------------------------------------------------------------
 // Safety Incidents — Sample historical incidents for correlation queries

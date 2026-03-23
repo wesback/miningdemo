@@ -3,7 +3,7 @@
 
 # Azure Event Hub connection (leave blank for console mode)
 connection_string: ""
-eventhub_name: "mining-sensor-stream"
+eventhub_name: "<es_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>"  # copy from Eventstream source; not the display name
 
 # Simulation parameters
 interval_sec: 10        # Seconds between each batch of events

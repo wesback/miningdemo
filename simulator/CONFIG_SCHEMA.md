@@ -20,7 +20,7 @@ This document describes the complete configuration schema for the Mining RTI Dem
 ```yaml
 # Azure Event Hub connection (leave blank for console mode)
 connection_string: ""        # Event Hub namespace connection string
-eventhub_name: ""            # Event Hub / Eventstream topic name
+eventhub_name: ""            # Event Hub / Eventstream topic name (use the system-generated es_... name for Fabric custom endpoints)
 
 # Simulation parameters
 interval_sec: 10             # Seconds between each batch of events
@@ -217,7 +217,7 @@ python simulator.py --config config.yaml --console
 ```yaml
 # config.yaml
 connection_string: "Endpoint=sb://mynamespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=<key>"
-eventhub_name: "mining-sensor-stream"
+eventhub_name: "<es_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>"  # copy from Eventstream source; not the display name
 interval_sec: 10
 batch_size: 50
 max_iterations: 0  # Run indefinitely
@@ -234,7 +234,7 @@ python simulator.py --config config.yaml
 ```yaml
 # config.yaml
 connection_string: "Endpoint=sb://..."
-eventhub_name: "mining-sensor-stream"
+eventhub_name: "<es_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>"  # copy from Eventstream source; not the display name
 interval_sec: 15
 max_iterations: 100  # Run for ~25 minutes (100 batches × 15 sec)
 ```
@@ -249,7 +249,7 @@ python simulator.py --config config.yaml --inject-anomaly gas
 ### Environment Variable Mode (No Config File)
 ```bash
 export EVENT_HUB_CONNECTION_STRING="Endpoint=sb://..."
-export EVENT_HUB_NAME="mining-sensor-stream"
+export EVENT_HUB_NAME="es_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 python simulator.py --interval 10
 ```

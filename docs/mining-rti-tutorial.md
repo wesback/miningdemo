@@ -6,7 +6,7 @@
 
 ## Scenario
 
-You are a **mining operations engineer** at a fictional mine in the Sudbury Basin region of Ontario, Canada.
+You are a **mining operations engineer** at a fictional Sudbury Basin (Ontario) iron ore mine.
 The operation runs 24/7 across three zones — **Zone-A, Zone-B, Zone-C** — with a fleet of:
 
 | Equipment | IDs | What we monitor |
@@ -67,39 +67,69 @@ Python Simulator (or real IoT hardware)
 
 ---
 
-## Step 1 — Create the Workspace and Eventhouse
+## Deployment Overview — What `deploy.py` Does For You
 
-1. Open [app.fabric.microsoft.com](https://app.fabric.microsoft.com) and create a new workspace
-   named **MiningRTI-Demo** with your Fabric capacity assigned.
-2. Inside the workspace: **+ New → Eventhouse** → name it **MiningRTI**.
-3. A KQL database named `MiningRTI` is created automatically — rename it to **MiningOps**.
-4. Note the **Query URI** shown on the database overview page (you'll need it for the Eventstream
-   destination).
+The repo ships `deploy.py`, which automates the majority of the setup via the Fabric REST API.
+**You do not need to run the KQL schema scripts or create items manually.**
 
-> **Quick deployment option:** The repo includes `deploy.py` — a single script that creates all
-> Fabric items via the REST API. Run it if you want to skip the manual steps:
->
-> ```bash
-> pip install azure-identity requests
-> python3 deploy.py --workspace-id <your-workspace-guid>
-> ```
->
-> After it completes, you still need to wire up the Eventstream source and destination in the
-> portal UI.
+| What `deploy.py` creates automatically | Still needs manual steps in the portal |
+|---|---|
+| Eventhouse (`MiningRTI`) | Create the workspace (needs a workspace-id to exist first) |
+| KQL Database (`MiningOps`) | Wire Eventstream source → destination in the portal UI |
+| All tables, update policies, JSON mapping | Configure Data Activator alert rules |
+| Reference data seeded (`kql/02-reference-data.kql`) | Load historical CSV data (optional) |
+| Streaming ingestion policies | Configure Anomaly Detection |
+| Eventstream item (`MiningSensorStream`) | |
+| KQL Queryset | |
+| Real-Time Dashboard item | |
+
+> **For automated CI/CD deployment:** If you prefer GitHub Actions automation (service principal auth, automated deployments on push to `main`, optional historical data generation), see the **[CI/CD Setup Guide](CICD_SETUP.md)** before proceeding.
 
 ---
 
-## Step 2 — Set Up the KQL Schema
+## Step 1 — Create the Workspace (one-time, portal only)
 
-Open `kql/01-schema-setup.kql` in your editor and run each command block **one at a time** in a
-KQL Queryset connected to `MiningOps`.
+1. Open [app.fabric.microsoft.com](https://app.fabric.microsoft.com).
+2. Create a new workspace named **MiningRTI-Demo** and assign your Fabric capacity (F2 or Trial).
+3. Copy the **workspace GUID** from the URL bar — you'll pass it to `deploy.py`.
 
-> **Important:** KQL Querysets execute one control command per run. Select from the `.` to the end
-> of the block, then click **Run**.
+---
 
-### Raw landing table
+## Step 2 — Run `deploy.py`
 
-Every sensor event arrives here first:
+```bash
+cd /path/to/miningdemo
+pip install azure-identity requests
+
+# Interactive browser login (simplest)
+python3 deploy.py --workspace-id <your-workspace-guid>
+
+# Service principal (CI/CD)
+python3 deploy.py \
+  --workspace-id  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+  --tenant-id     xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+  --client-id     xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+  --client-secret <secret>
+```
+
+When it completes, your workspace will contain:
+
+- **Eventhouse** → `MiningRTI` with database `MiningOps`
+- All tables (`SensorReadings`, `EquipmentTelemetry`, `EnvironmentalReadings`,
+  `ProductionMetrics`, `EquipmentRegistry`, `AlertThresholds`, `SafetyIncidents`)
+- Update policies, JSON ingestion mapping, streaming ingestion enabled, reference data seeded
+- **Eventstream** → `MiningSensorStream` (item created, not yet wired)
+- **KQL Queryset** → ready to query
+- **Real-Time Dashboard** → item created (tiles configured separately — see Step 6)
+
+> **Understanding the schema (reference):** Steps 2a–2d below explain what `deploy.py` sets up
+> under the hood. Read them to understand the architecture; you do not need to run them manually.
+
+---
+
+### 2a — Raw landing table and JSON mapping *(automated by deploy.py)*
+
+Every sensor event lands in `SensorReadings` first, parsed via a JSON mapping:
 
 ```kql
 .create table SensorReadings (
@@ -108,24 +138,18 @@ Every sensor event arrives here first:
     Zone: string, Latitude: real, Longitude: real,
     Timestamp: datetime, Quality: string, Shift: string
 )
-```
 
-### JSON ingestion mapping
-
-Tells Fabric how to parse incoming Event Hub messages:
-
-```kql
 .create-or-alter table SensorReadings ingestion json mapping "SensorReadingsJsonMapping"
 '[
-  {"column":"EventId",       "path":"$.EventId",       "datatype":"string"},
-  {"column":"EquipmentId",   "path":"$.EquipmentId",   "datatype":"string"},
-  {"column":"SensorType",    "path":"$.SensorType",    "datatype":"string"},
-  {"column":"Value",         "path":"$.Value",         "datatype":"real"},
-  {"column":"Timestamp",     "path":"$.Timestamp",     "datatype":"datetime"}
+  {"column":"EventId",     "path":"$.EventId",     "datatype":"string"},
+  {"column":"EquipmentId", "path":"$.EquipmentId", "datatype":"string"},
+  {"column":"SensorType",  "path":"$.SensorType",  "datatype":"string"},
+  {"column":"Value",       "path":"$.Value",       "datatype":"real"},
+  {"column":"Timestamp",   "path":"$.Timestamp",   "datatype":"datetime"}
 ]'
 ```
 
-### Three materialised tables (update policy fan-out)
+### 2b — Three materialised tables via update policies *(automated by deploy.py)*
 
 | Table | Filter logic | Data it holds |
 |---|---|---|
@@ -133,24 +157,21 @@ Tells Fabric how to parse incoming Event Hub messages:
 | `EnvironmentalReadings` | `EquipmentType == "environmental_sensor"` | CO, CH₄, temperature, dust |
 | `ProductionMetrics` | `SensorType in ("load_tonnes","belt_load_kg_m","belt_speed_m_s","cycle_state")` | Tonnage, throughput |
 
-The update policy pattern — data lands in `SensorReadings` once; Fabric automatically routes
-copies to the right table with zero code:
+Data lands in `SensorReadings` once; Fabric automatically routes copies to the right table:
 
 ```kql
-// Function that defines the filter
 .create-or-alter function EquipmentTelemetryFilter() {
     SensorReadings
     | where EquipmentType in ("haul_truck", "conveyor", "drill")
     | where SensorType !in ("load_tonnes", "belt_load_kg_m", "belt_speed_m_s", "cycle_state")
 }
 
-// Policy that attaches the function to the target table
 .alter table EquipmentTelemetry policy update
 '[{"IsEnabled":true, "Source":"SensorReadings",
    "Query":"EquipmentTelemetryFilter()", "IsTransactional":true}]'
 ```
 
-### Reference tables (seeded once from `kql/02-reference-data.kql`)
+### 2c — Reference tables *(automated by deploy.py)*
 
 ```kql
 .create table EquipmentRegistry (
@@ -173,30 +194,31 @@ copies to the right table with zero code:
 )
 ```
 
-### Enable streaming ingestion
-
-So data is available in queries within seconds (not minutes):
+### 2d — Streaming ingestion *(automated by deploy.py)*
 
 ```kql
-.alter table SensorReadings      policy streamingingestion '{"IsEnabled": true}'
-.alter table EquipmentTelemetry  policy streamingingestion '{"IsEnabled": true}'
+.alter table SensorReadings        policy streamingingestion '{"IsEnabled": true}'
+.alter table EquipmentTelemetry    policy streamingingestion '{"IsEnabled": true}'
 .alter table EnvironmentalReadings policy streamingingestion '{"IsEnabled": true}'
-.alter table ProductionMetrics   policy streamingingestion '{"IsEnabled": true}'
+.alter table ProductionMetrics     policy streamingingestion '{"IsEnabled": true}'
 ```
 
 ---
 
-## Step 3 — Create the Eventstream
+## Step 3 — Wire the Eventstream (portal UI — required)
 
-1. **+ New → Eventstream** → name it **MiningSensorStream**. Enable **Enhanced capabilities**.
+`deploy.py` creates the `MiningSensorStream` item but cannot wire its source and destination via
+the REST API — this must be done in the Fabric portal.
+
+1. Open **MiningSensorStream** in the workspace.
 
 2. **Add Source:**
-   - Choose **Custom endpoint** (provisions an Event Hub-compatible endpoint inside Fabric — no
-     separate Azure subscription needed)
-   - Copy the **connection string** and **Event Hub name** for the simulator
+   - Choose **Custom endpoint**
+   - Copy the **connection string** and the **Event Hub name** — the name is a system-assigned
+     **GUID** (e.g. `es_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), not a human-readable label
 
 3. **Add Destination:**
-   - Type: **Eventhouse**
+   - Type: **KQL Database**
    - Database: `MiningOps`
    - Table: `SensorReadings`
    - Data format: `JSON`

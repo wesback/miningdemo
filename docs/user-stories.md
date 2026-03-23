@@ -135,11 +135,12 @@
 - Summary generated at each shift change (06:00, 14:00, 22:00).
 - Delivered as a dashboard page and optional email.
 
-### US-4.3  Historical Trend Analysis
+### US-4.3  Active Alerts
 **As a** Data Analyst,
-**I want** to run ad-hoc KQL queries against 90 days of sensor history with sub-second response on aggregations,
-**so that** I can investigate long-term degradation patterns and seasonal effects.
+**I want** a live table of current critical alerts from the last 15 minutes,
+**so that** I can investigate active safety and equipment issues quickly.
 
 **Acceptance Criteria**
-- 90-day hot cache available.
-- Query editor integrated in Fabric workspace.
+- Table refreshes every 15 s.
+- Includes timestamp, zone, sensor, value, threshold, and severity.
+- Query is available in the Fabric workspace KQL Queryset.

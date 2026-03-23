@@ -96,7 +96,7 @@ After deployment, open the Eventstream in the Fabric portal to configure its **c
 ### Step 3 — Run KQL Schema Scripts
 
 1. In the workspace, click **+ New → KQL Queryset**.
-2. Name it **`MiningOps-Setup`** and connect it to the `MiningOps` database.
+2. Name it **`MiningOps-Queries`** and connect it to the `MiningOps` database.
 3. Open `kql/01-schema-setup.kql` and execute **each command block** sequentially:
    - Creates landing table `SensorReadings` with JSON ingestion mapping
    - Creates materialised tables: `EquipmentTelemetry`, `EnvironmentalReadings`, `ProductionMetrics`
@@ -115,7 +115,7 @@ After deployment, open the Eventstream in the Fabric portal to configure its **c
 3. **Add Source:**
    - Type: **Custom endpoint** (creates an Event Hub-compatible endpoint)
    - Or: **Azure Event Hubs** (if using an existing namespace)
-   - Note the **connection string** and **Event Hub name** for the simulator.
+   - Note the **connection string** and the **system-generated Event Hub name** (from the Eventstream custom endpoint) for the simulator.
 4. **Add Destination:**
    - Type: **KQL Database**
    - Database: `MiningOps`
@@ -142,7 +142,7 @@ python simulator.py --console --max-iterations 5
 
 # Option B: Stream to Event Hub / Eventstream
 export EVENT_HUB_CONNECTION_STRING="Endpoint=sb://..."
-export EVENT_HUB_NAME="mining-sensor-stream"
+export EVENT_HUB_NAME="<es_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>"  # copy from Eventstream source; not the display name
 python simulator.py --interval 10
 ```
 
