@@ -71,6 +71,18 @@ All changes follow defensive coding patterns with zero breaking changes. Perform
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-03-27: KQL Queryset `queryset` Wrapper Is Required
+**Context:** Queryset deployed without errors but UI showed zero queries after commit `5c515ff` removed the outer `{"queryset": {...}}` wrapper.
+
+**Root cause:** The Fabric API silently accepts any valid JSON — HTTP 200 does NOT guarantee the UI will render the content. The official MS docs canonical example (learn.microsoft.com/.../kql-queryset-definition) decodes to `{"queryset": {...}}` with the wrapper at the root.
+
+**Fix:** `build_queryset_definition()` in `deploy.py` must wrap content as `{"queryset": {"version": ..., "dataSources": [...], "tabs": [...]}}`.
+
+**Pattern:** "API accepts it" ≠ "UI renders it". Always decode the base64 payload and compare root key structure against the official docs example, not just the field table.
+
+**Commit:** `2032441`
+**Decision:** `.squad/decisions/inbox/parker-empty-queryset-fix.md`
+
 ### 2026-03-23: Deployment Script Requirements
 **Context:** Attempted deployment execution without workspace configuration.
 
