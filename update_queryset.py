@@ -48,7 +48,7 @@ def main():
 
     # Find the existing queryset
     log.info("Finding existing KQL Queryset '%s'...", QUERYSET_NAME)
-    existing = client.find_item("KQLQueryset", QUERYSET_NAME)
+    existing = client.get_item_by_name("KQLQueryset", QUERYSET_NAME)
     if not existing:
         log.error("❌ Queryset '%s' not found in workspace. Run deploy.py first.", QUERYSET_NAME)
         sys.exit(1)
@@ -58,7 +58,7 @@ def main():
 
     # Find the database to get query URI
     log.info("Finding KQL Database '%s' to get query URI...", DATABASE_NAME)
-    database = client.find_item("KQLDatabase", DATABASE_NAME)
+    database = client.get_item_by_name("KQLDatabase", DATABASE_NAME)
     if not database:
         log.error("❌ Database '%s' not found in workspace. Run deploy.py first.", DATABASE_NAME)
         sys.exit(1)
