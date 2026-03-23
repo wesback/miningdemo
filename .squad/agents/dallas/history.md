@@ -408,3 +408,29 @@ When direct API payload inspection is unavailable, validate via:
 **Logs:**
 - Session: `.squad/log/20260323-141826-live-fabric-item-inspection.md`
 - Orchestration: `.squad/orchestration-log/20260323-141826-dallas-live-item.md`
+
+---
+
+### 2026-03-27: Live Item Inspection — Tab dataSourceId Schema Bug Found and Fixed
+
+**Live item confirmed:** Queryset ID `db3dc49b-f1a1-42e2-b47a-3a7c3d3fc18c`, Database ID `d1bfe4b5-40c0-4603-a748-3c8e5f9d4b9b`, Cluster `https://trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`
+
+**Evidence gathered:**
+- Workflow Run #5 (commit `c684b71`) succeeded, deploying 28 tabs with `version=1.0.0`, `dataSources=1`
+- Decoded official MS docs example payload (base64) — tab schema is unambiguous
+- Failed runs #1 and #2 failed due to HTTP 400 on list endpoint, NOT the tab schema
+
+**Bug found:** Commit `d00fd37` introduced a nested `"dataSource": {"kind": "inline", "dataSourceId": "..."}` object in each tab, claiming it fixed a "Something went wrong" UI error. This was a misdiagnosis. The official schema requires a flat `"dataSourceId"` string at the tab root. Fabric API accepted the nested payload (lenient validation) but the UI client cannot resolve the datasource reference from the nested format.
+
+**Fix applied:**
+- `deploy.py`: All three tab creation paths now use flat `"dataSourceId": ds_id`
+- `validate_fabric_definitions.py`: Tab validation updated to require flat `dataSourceId` and reject nested `dataSource` objects
+
+**Validator output:** ✅ PASSED — 28 tabs, all schema-compliant
+
+**Durable pattern:**
+> KQL Queryset tab datasource reference = flat `"dataSourceId"` string.
+> Real-Time Dashboard query datasource reference = nested `"dataSource": {"kind": "...", ...}` object.
+> These two item types use DIFFERENT schemas. Never cross-apply the dashboard pattern to queryset tabs.
+
+**Next step:** Push to `kql/**` or trigger `update-queryset.yml` to deploy corrected schema to live item.
