@@ -256,3 +256,84 @@ This lesson transfers to Parker and all future schema work.
 **Status:** Merged to `.squad/decisions.md` on 2026-03-23  
 **Orchestration Log:** `.squad/orchestration-log/2026-03-23T12-17-43Z-dallas.md`  
 **Session Log:** `.squad/log/2026-03-23T12-17-43Z-cicd-tutorial-pointer.md`
+
+### 2026-03-27: Queryset Runtime Error Diagnosis — "Something went wrong" SessionId Pattern
+
+**Symptom:** User gets generic "Something went wrong For contact support, SessionId='...', InstanceId='...'" error when opening queryset in Fabric UI, despite successful deployment (HTTP 201).
+
+**Root Cause:** This is a **runtime error**, not a deployment error. The queryset deployed successfully with correct structure (`{"queryset": {...}}`), but the KQL query content has semantic errors that the Fabric UI encounters when trying to parse/validate tabs on load.
+
+**Specific Issue:** The queryset in Fabric still contains OLD broken queries (before the VibrationAnomalies and IncidentEnvironmentalCorrelation fixes). When the UI tries to validate these queries, it hits KQL semantic errors:
+- VibrationAnomalies: `series_fir()` type mismatch + `Latest_Value` phantom column reference
+- IncidentEnvironmentalCorrelation: `EnvironmentalReadings_Timestamp` instead of `Timestamp1`
+
+**Key Insight — Two Error Modes:**
+
+Fabric exhibits two distinct error patterns:
+
+1. **Deployment Errors (4xx/5xx responses):**
+   - Schema validation failures
+   - Malformed payloads
+   - Auth issues
+   - Return actionable error details in HTTP response
+
+2. **Runtime Errors (2xx success + UI failure):**
+   - Query semantic errors (syntax OK, semantics wrong)
+   - Data source connection failures
+   - Query execution permission issues
+   - Return generic "Something went wrong" with SessionId/InstanceId
+   - **No useful diagnostic info in API response**
+
+**Diagnostic Rule:**
+- "Something went wrong" + SessionId → **Runtime error**; content is broken
+- HTTP 4xx/5xx → **Deployment error**; request/payload was rejected
+
+**Solution:** Update the queryset definition with corrected queries by running `update_queryset.py` or `deploy.py`. The deployment API will accept the update (2xx), and the UI will then render correctly.
+
+**Deliverable:** Created `update_queryset.py` — a quick script to update just the queryset without re-deploying the entire stack (Eventhouse, Eventstream, Dashboard, etc.). Faster iteration cycle for query fixes.
+
+**Pattern for Team:**
+1. KQL fixes → local `kql/03-queries.kql` file
+2. Validate queries against live database schema
+3. Run `update_queryset.py` to push changes
+4. Verify in Fabric UI that all tabs load
+
+**Files Changed:**
+- `update_queryset.py` (NEW)
+- `.squad/decisions/inbox/dallas-queryset-runtime-error.md` (NEW)
+
+**Cross-agent impact:**
+- Parker: Should know the deployment vs runtime error distinction
+- Ash: Validate KQL query semantics before deployment
+- Lambert: Consider adding KQL semantic validation (beyond structure checks)
+
+### March 27, 2026: Queryset Runtime Error Diagnosis & Solution (Complete)
+
+**Status:** ✅ COMPLETE  
+**Work Duration:** 2026-03-27  
+**Collaborators:** Parker (KQL fixes, queryset-only workflow), Lambert (schema validation)
+
+Dallas diagnosed the user's "Something went wrong" queryset error as a **runtime error, not a deployment error**:
+
+**Problem:** User sees "Something went wrong For contact support, SessionId='905ac82d-...'" error when opening queryset in Fabric UI, AFTER HTTP 201 deployment success.
+
+**Root Cause:** Two KQL queries had semantic errors (fixed locally in `kql/03-queries.kql` but queryset definition still contained old broken versions):
+1. VibrationAnomalies: `series_fir()` type mismatch + phantom column `Latest_Value`
+2. IncidentEnvironmentalCorrelation: Join column naming error (`EnvironmentalReadings_Timestamp` instead of `Timestamp1`)
+
+**Solution:** Created reusable framework for distinguishing deployment errors (4xx/5xx with details) from runtime errors (2xx success + UI failure). Documented diagnostic checklist for future incidents.
+
+**Key Lesson:** Fabric has two distinct error modes:
+- **Deployment Errors (4xx/5xx):** Schema validation, malformed JSON, auth issues — error details in response
+- **Runtime Errors (HTTP 2xx + UI failure):** Query/data source issues — generic "Something went wrong" with SessionId
+
+**Deliverable:** `.squad/decisions.md` § "KQL Queryset Runtime Error Diagnosis" — Complete pattern for error diagnosis and solution
+
+**Files Changed:**
+- None (diagnosis and documentation only; KQL fixes by Parker, schema fixes by Lambert)
+- `.squad/decisions/inbox/dallas-queryset-runtime-error.md` → merged to decisions.md
+
+**Team Update:**
+- Parker: Working on queryset-only update workflow + KQL semantic fixes
+- Lambert: Working on queryset schema validation (nested dataSource oneOf)
+- Ash: Should validate KQL semantics in future deployments

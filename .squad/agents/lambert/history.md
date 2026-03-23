@@ -138,3 +138,84 @@ if kind == "inline":
 elif kind == "parameter":
     assert "parameterId" in obj
 ```
+
+### 2026-03-27: Queryset Tab dataSource Schema — Missed in Dashboard Fix
+
+**Context:** User reported "Something went wrong" error when opening queryset in Fabric browser UI. The error message referenced a SessionId and InstanceId but gave no specific schema details.
+
+**Root Cause:** Dashboard queries were fixed on 2026-03-27 to use the nested `dataSource` oneOf object (kind + dataSourceId), but queryset tabs were left with the old flat `dataSourceId` field. Both dashboard queries and queryset tabs use the same Fabric client schema requirements.
+
+**Affected Code:**
+- `deploy.py` lines 688-712: Three tab creation paths (production queries, predictive queries, empty fallback)
+- All 29 query tabs had flat `"dataSourceId": ds_id"` instead of `"dataSource": {"kind": "inline", "dataSourceId": ds_id}`
+
+**Fix Applied:**
+1. `deploy.py`: Updated all tab dictionaries to use nested dataSource object
+2. `validate_fabric_definitions.py`: Enhanced tab validation with full oneOf validation:
+   - Checks for flat dataSourceId (forbidden)
+   - Validates dataSource object presence and structure
+   - Validates kind is "inline" or "parameter"
+   - Cross-references dataSourceId with dataSources array
+
+**Validation:** `python3 validate_fabric_definitions.py` → ✅ PASSED (29 query tabs)
+
+**Durable Pattern — Schema Parity Between Item Types:**
+When fixing a Fabric schema issue for one item type (dashboard), check if the same schema requirement applies to related item types (queryset). The Fabric Git integration schema often shares common structures across multiple item types (dashboards, querysets, reports).
+
+**Detection Gap:** The validator previously only checked for *presence* of dataSourceId (flat), not its correctness. Now it actively rejects flat dataSourceId and enforces the oneOf object structure. This would have caught the drift.
+
+**Key Files:**
+- `deploy.py`: Lines 688-712 (queryset tab definitions)
+- `.squad/agents/lambert/validate_fabric_definitions.py`: Lines 82-119 (tab validation)
+
+**Commit:** d00fd37
+
+### March 27, 2026: Queryset Tab Schema Validation Complete (Complete)
+
+**Status:** ✅ COMPLETE  
+**Work Duration:** 2026-03-27  
+**Collaborators:** Dallas (runtime error diagnosis), Parker (KQL fixes + workflow)
+
+Lambert enhanced validation infrastructure to catch and prevent schema drift between related Fabric item types (dashboard, queryset).
+
+**Work Summary:**
+
+1. **Identified Schema Mismatch:** Queryset tabs were using old flat `dataSourceId` while dashboard queries use nested `dataSource` oneOf object
+   - ❌ Old: `"dataSourceId": "mining-ops-source"`
+   - ✅ New: `{"kind": "inline", "dataSourceId": "mining-ops-source"}`
+
+2. **Applied Fix to All Tab Types:**
+   - `deploy.py` lines 688-712: Updated production tabs, predictive tabs, and fallback tab
+   - All 29 query tabs now emit nested dataSource structure
+
+3. **Enhanced Validator:**
+   - Updated `.squad/agents/lambert/validate_fabric_definitions.py` lines 82-119
+   - Now validates discriminator field (`kind`) is one of allowed constants
+   - Verifies branch-specific required fields are present
+   - Cross-references IDs exist in parent collections
+   - Active rejection of flat dataSourceId (would have caught this drift)
+
+4. **Validation Verification:**
+   ```bash
+   python3 .squad/agents/lambert/validate_fabric_definitions.py
+   ```
+   ✅ PASSED — All 29 query tabs validated with nested schema
+
+**Reusable Pattern — Schema Parity Check:**
+When fixing a Fabric schema issue for one item type (e.g., dashboard), systematically check related item types (queryset, report) for the same requirement. The Fabric Git integration schema shares common structures across multiple item types.
+
+**Prevention Pattern:**
+Validators should actively reject incorrect patterns (not just check presence). For oneOf schemas:
+1. Validate discriminator field is one of allowed constants
+2. Enforce branch-specific required fields
+3. Cross-reference related IDs
+
+**Impact:**
+- ✅ Queryset opens in Fabric UI without schema-related errors
+- ✅ All 29 tabs accessible (21 production + 8 predictive)
+- ✅ Validator now catches oneOf schema violations before deployment
+
+**Team Update:**
+- Dallas: Documented error distinction patterns
+- Parker: Fixed KQL semantic errors + validated workflow
+- Validator now enforces schema parity across item types

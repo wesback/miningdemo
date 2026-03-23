@@ -148,3 +148,81 @@ This catches structural issues before deployment.
 - `deploy.py`: restored `queryset` wrapper in `build_queryset_definition()`
 
 This parallel investigation validates the root cause and strengthens confidence in the fix.
+
+### 2026-03-27: Created Queryset-Only Update Path
+**Context:** User couldn't open queryset in Fabric UI ("Something went wrong" error). Full deploy workflow was blocked by eventhouse creation issues.
+
+**Solution:** 
+- Created `.github/workflows/update-queryset.yml` for fast queryset-only updates
+- Committed `update_queryset.py` (was untracked) — reuses deploy.py logic via imports
+- Workflow triggers on `kql/**` changes or manual dispatch
+- Bypasses full infrastructure deployment (eventhouse, eventstream creation)
+- Completes in ~30s vs. 10+ min for full deploy
+
+**Key patterns:**
+- Imports `build_queryset_definition()` from `deploy.py` to avoid duplication
+- Fails fast if queryset/database doesn't exist (requires initial deploy first)
+- Uses same secrets as full deploy (`FABRIC_WORKSPACE_ID`, auth credentials)
+- Provides structured error messages on missing config
+
+**Files:**
+- `.github/workflows/update-queryset.yml` (new workflow)
+- `update_queryset.py` (now tracked and committed)
+
+**Decision:** `.squad/decisions/inbox/parker-queryset-only-workflow.md`
+
+**Commit:** `2bd2001`
+
+**Trade-offs:** Two workflows to maintain, but enables rapid query iteration without infrastructure risk.
+
+### March 27, 2026: KQL Semantic Fixes + Queryset-Only Workflow Validation (Complete)
+
+**Status:** ✅ COMPLETE  
+**Work Duration:** 2026-03-27  
+**Collaborators:** Dallas (error diagnosis), Lambert (schema validation)
+
+Parker fixed two critical KQL semantic errors and validated the queryset-only workflow via GitHub Actions run #23438225213.
+
+**KQL Fixes in `kql/03-queries.kql`:**
+
+**Bug 1: VibrationAnomalies Query**
+- **Error:** `Semantic error: series_fir(): argument #1 was not of an expected data type: dynamic`
+- **Root Cause:** `partition by` block passed scalar `real` Value to `series_fir()` (requires dynamic array). Query also referenced non-existent column `Latest_Value`.
+- **Fix:** Removed dead `partition by` block, changed `Latest_Value` → `Value`
+- **Verification:** Executed against live MiningOps Eventhouse; results returned correctly
+
+**Bug 2: IncidentEnvironmentalCorrelation Query**
+- **Error:** `Semantic error: 'where' operator: Failed to resolve scalar expression named 'EnvironmentalReadings_Timestamp'`
+- **Root Cause:** KQL joins rename conflicting columns with numeric suffix (`Timestamp1`), not table-name prefix
+- **Fix:** Changed `EnvironmentalReadings_Timestamp` → `Timestamp1`, `SafetyIncidents_Timestamp` → `Timestamp`
+- **Verification:** Executed against live database; results validated
+
+**Reusable Patterns:**
+- **Join column naming rule:** After join, conflicting columns get numeric suffix (`1`, `2`, ...), NOT table-name prefix. The `TableName_Column` syntax only works inside `$right.`/`$left.` references.
+- **`arg_max` column naming rule:** `summarize Alias = arg_max(Col1, Col2)` produces `Alias` (for Col1) and `Col2` (original), not `Alias_Col2`.
+
+**Queryset-Only Workflow Validation:**
+
+GitHub Actions run #23438225213 executed successfully:
+- ✅ Checkout repository
+- ✅ Set up Python + dependencies
+- ✅ Authenticate with Azure
+- ✅ Execute `update_queryset.py`
+- ✅ Verify queryset definition POST (HTTP 200 OK)
+
+**Validation Results:**
+- ✅ Queryset opens in Fabric UI
+- ✅ All 29 tabs visible (21 production + 8 predictive)
+- ✅ Sample queries execute without semantic errors
+- ✅ No "Something went wrong" errors
+
+**Deliverables:**
+- `kql/03-queries.kql` — Fixed VibrationAnomalies and IncidentEnvironmentalCorrelation queries
+- `.squad/decisions/inbox/parker-queryset-only-workflow.md` → merged to decisions.md
+- `.squad/decisions/inbox/fabric-troubleshoot-queryset.md` → merged to decisions.md
+- GitHub Actions run #23438225213 logged and documented
+
+**Team Update:**
+- Dallas: Documented runtime error distinction and diagnostic patterns
+- Lambert: Fixed queryset schema to use nested dataSource oneOf
+- Workflow is production-ready and validated
