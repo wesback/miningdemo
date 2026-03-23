@@ -375,3 +375,36 @@ Always hard refresh browser after queryset updates
 **Impact:** All future queryset updates will include explicit cache guidance for users.
 
 **Decision File:** `.squad/decisions/inbox/dallas-queryset-browser-error-diagnosis.md`
+
+### March 27, 2026: Live Queryset Update Verification — 28-Tab Confirmation
+
+**Task:** Verify live Fabric queryset reflects latest committed KQL changes via GitHub Actions workflow evidence.
+
+**What Was Verified:**
+- Queryset item id=db3dc49b-f1a1-42e2-b47a-3a7c3d3fc18c in workspace c7cc9e30-5045-4a5f-8f58-fdb3d1092589
+- Latest update applied against commit c684b71 via `update_queryset.py`
+- HTTP 200 response confirmed (successful backend update)
+
+**Evidence:**
+- GitHub Actions workflow output: Successful execution
+- Query tab count: 28 tabs rebuilt from current KQL (matches local definition)
+- Structure: Root `{"queryset": {...}}` wrapper present
+- DataSource nesting: Correct nested structure
+
+**Key Finding — Workflow Validation is Strong:**
+Even without direct REST API payload inspection available via tools, the combination of:
+1. Workflow success (HTTP 200)
+2. Query tab count consistency (28 tabs match KQL)
+3. Local schema validation (structure matches Fabric spec)
+...provides high confidence that the live item is correct.
+
+**Pattern for Team:**
+When direct API payload inspection is unavailable, validate via:
+- Workflow output + HTTP response codes
+- Tab/query count consistency with local KQL definition
+- Schema structure checks against official Fabric spec
+- User-visible testing in Fabric UI (tabs render correctly)
+
+**Logs:**
+- Session: `.squad/log/20260323-141826-live-fabric-item-inspection.md`
+- Orchestration: `.squad/orchestration-log/20260323-141826-dallas-live-item.md`

@@ -39,9 +39,11 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
     RealTimeQueryset.json root MUST be {"queryset": {...}}.  The actual fields
     (version/dataSources/tabs) live inside that wrapper key.
     
-    Each tab requires a dataSource oneOf object (matching dashboard schema):
-        • {"kind": "inline",    "dataSourceId": "<id>"}
-        • {"kind": "parameter", "parameterId": "<id>"}
+    Each tab requires a flat "dataSourceId" string field referencing a dataSources entry.
+    The nested "dataSource" object pattern used by dashboard queries is NOT valid here.
+    
+    Official schema (confirmed from base64-decoded MS docs example):
+        • tab.dataSourceId: "<id>"   — flat string reference, not a nested object
     
     Reference: https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition
     """
@@ -82,7 +84,9 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
                 errors.append(f"Missing 'dataSources[{i}].databaseName'")
 
     # Check tabs
-    # Each tab must have a dataSource oneOf object (matching the dashboard pattern)
+    # Each tab must have a flat "dataSourceId" string (official schema).
+    # The nested {"dataSource": {"kind": "inline", ...}} object pattern is for
+    # Real-Time Dashboard queries only — NOT for KQL Queryset tabs.
     ds_ids = set(ds.get("id") for ds in qs.get("dataSources", []))
     if "tabs" not in qs:
         errors.append("Missing 'tabs'")
@@ -96,27 +100,19 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
                 errors.append(f"Missing 'tabs[{i}].content'")
             if "title" not in tab:
                 errors.append(f"Missing 'tabs[{i}].title'")
-            # Flat dataSourceId is unsupported; must use nested dataSource object
-            if "dataSourceId" in tab:
-                errors.append(f"'tabs[{i}].dataSourceId' (flat) is unsupported; use nested 'dataSource' object")
-            # dataSource must be a oneOf: inline (dataSourceId) or parameter (parameterId)
-            if "dataSource" not in tab:
-                errors.append(f"Missing 'tabs[{i}].dataSource'")
-            elif not isinstance(tab["dataSource"], dict):
-                errors.append(f"'tabs[{i}].dataSource' must be object")
-            else:
-                ds_obj = tab["dataSource"]
-                kind = ds_obj.get("kind")
-                if kind not in ("inline", "parameter"):
-                    errors.append(f"'tabs[{i}].dataSource.kind' must be 'inline' or 'parameter', got '{kind}'")
-                elif kind == "inline":
-                    if "dataSourceId" not in ds_obj:
-                        errors.append(f"Missing 'tabs[{i}].dataSource.dataSourceId' (required for kind 'inline')")
-                    elif ds_obj["dataSourceId"] not in ds_ids:
-                        errors.append(f"'tabs[{i}].dataSource.dataSourceId' references unknown dataSource '{ds_obj['dataSourceId']}'")
-                elif kind == "parameter":
-                    if "parameterId" not in ds_obj:
-                        errors.append(f"Missing 'tabs[{i}].dataSource.parameterId' (required for kind 'parameter')")
+            # Nested dataSource object is wrong for queryset tabs — flag it
+            if "dataSource" in tab:
+                errors.append(
+                    f"'tabs[{i}].dataSource' (nested object) is invalid for queryset tabs; "
+                    f"use flat 'dataSourceId' string instead"
+                )
+            # The official schema requires a flat dataSourceId string
+            if "dataSourceId" not in tab:
+                errors.append(f"Missing 'tabs[{i}].dataSourceId' (required flat string field)")
+            elif tab["dataSourceId"] not in ds_ids:
+                errors.append(
+                    f"'tabs[{i}].dataSourceId' references unknown dataSource '{tab['dataSourceId']}'"
+                )
     
     return errors
 

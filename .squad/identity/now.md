@@ -1,9 +1,9 @@
 ---
-updated_at: 2026-03-20T11:46:55.723Z
-focus_area: Initial setup
+updated_at: 2026-03-23T13:11:41.625Z
+focus_area: Live Fabric item inspection
 active_issues: []
 ---
 
 # What We're Focused On
 
-Getting started. Updated by coordinator at session start.
+Checking the live Fabric queryset item and confirming the deployed state matches the fixed repo.
