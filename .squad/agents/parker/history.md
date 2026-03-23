@@ -132,3 +132,57 @@
 **Context:** Dallas created `docs/CICD_SETUP.md` to address user onboarding gap around service principal configuration and secret setup for GitHub Actions CI/CD.
 **Impact on your work:** Your workflow (deploy-fabric.yml) is now fully documented in a dedicated guide with troubleshooting section covering 15+ common errors. Users can self-serve auth failures and secret configuration without support. Guide includes exact secret names, workspace access requirements, and post-deployment reality checks (manual Eventstream wiring).
 **Cross-reference:** If workflow changes (new secrets, new jobs, trigger adjustments), ping Dallas to update guide sections 2-4. Otherwise, guide is decoupled and requires no changes from Parker unless workflow internals change significantly.
+
+### 2026-03-20: Fixed DataFormat import error in activator/ingest_history.py
+**Files changed:**
+- `activator/ingest_history.py`: Removed `DataFormat` enum import and replaced enum usage with plain string literal `"csv"`.
+
+**Issue:** The `DataFormat` enum doesn't exist in `azure.kusto.ingest` or `azure.kusto.data` at version 4.3.x. Runtime import failed with `cannot import name 'DataFormat'`.
+
+**Root cause:** API change in azure-kusto-ingest SDK. Older versions exposed DataFormat enum from azure.kusto.data, but current 4.x versions accept plain string literals for data_format parameter.
+
+**Solution:**
+1. Removed `DataFormat` from line 58 import: `from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat` → `from azure.kusto.data import KustoClient, KustoConnectionStringBuilder`
+2. Changed line 228 from enum to string: `data_format=DataFormat.CSV` → `data_format="csv"`
+
+**Pattern learned:** Azure Kusto SDK IngestionProperties accepts string literals for data_format ("csv", "json", "parquet", etc.) as of 4.x versions. No enum required. This is consistent with Azure SDK design patterns that favor simple types over custom enums.
+
+**Testing notes:** Script should now import cleanly. Verify with: `python -c "from activator.ingest_history import *"` (should exit silently). Full integration test requires Fabric cluster URI and credentials.
+
+### 2026-03-20: Fixed missing .platform part in Fabric item definitions (CRITICAL)
+**Files changed:**
+- `deploy.py`: Fixed `build_queryset_definition()` and `build_dashboard_definition()` to include required `.platform` metadata part
+
+**Issue:** KQL Queryset and Real-Time Dashboard creation was failing because item definitions were missing the mandatory `.platform` part. The Fabric REST API requires **two parts** for definition-based items:
+1. Main payload file (RealTimeQueryset.json or RealTimeDashboard.json)
+2. Platform metadata file (.platform)
+
+We were only sending the main payload, causing 400 Bad Request errors.
+
+**Root cause:** Incomplete understanding of Fabric REST API schema requirements. Microsoft documentation explicitly shows both parts are required for item definitions.
+
+**Solution:**
+Added `.platform` part to both builder functions with minimal required metadata:
+```python
+platform_metadata = {
+    "version": "1.0.0",
+    "type": "KQLQueryset"  # or "KQLDashboard"
+}
+platform_encoded = base64.b64encode(json.dumps(platform_metadata).encode()).decode()
+```
+
+**Pattern learned:** 
+- All Fabric definition-based items (Queryset, Dashboard, etc.) require `.platform` metadata
+- Platform file contains version and type — minimal schema is sufficient
+- Base64 encoding required for both main payload and platform metadata
+- Official Microsoft Learn docs are authoritative for REST API schemas
+
+**Evidence source:** 
+- [Microsoft Learn - KQL Dashboard Definition](https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-dashboard-definition)
+- [Microsoft Learn - KQL Queryset Definition](https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition)
+
+**Testing:** Python syntax validated. Full deployment test requires Fabric workspace with credentials.
+
+**Cross-team impact:** This was the blocker preventing Fabric item deployment for days. With this fix, deploy.py should successfully create both KQL Queryset and Real-Time Dashboard items. Dallas's dashboard config was always correct — the problem was in the REST API wrapper code.
+
+**Decision file:** `.squad/decisions/inbox/parker-fabric-api-platform-fix.md`

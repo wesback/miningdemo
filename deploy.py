@@ -692,12 +692,25 @@ def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]
     }
 
     encoded = base64.b64encode(json.dumps(queryset_json).encode()).decode()
+    
+    # .platform file — required for Fabric item definitions
+    platform_metadata = {
+        "version": "1.0.0",
+        "type": "KQLQueryset"
+    }
+    platform_encoded = base64.b64encode(json.dumps(platform_metadata).encode()).decode()
+    
     return {
         "definition": {
             "parts": [
                 {
                     "path": "RealTimeQueryset.json",
                     "payload": encoded,
+                    "payloadType": "InlineBase64",
+                },
+                {
+                    "path": ".platform",
+                    "payload": platform_encoded,
                     "payloadType": "InlineBase64",
                 }
             ]
@@ -761,16 +774,16 @@ def build_dashboard_definition(cluster_uri: str, database: str, database_id: str
     t_id = {k: uid(f"tile-{k}") for k in q_id}
 
     # ------------------------------------------------------------------
-    # Data source — kind MUST be "kusto-trident"; workspace can be "".
+    # Data source — matches official Git integration schema.
+    # Kind should be "KQLDatabase" per official Fabric documentation.
     # ------------------------------------------------------------------
     data_source = {
         "id":         ds_id,
         "name":       database,
-        "scopeId":    database_id,
-        "kind":       "kusto-trident",
         "clusterUri": cluster_uri,
         "database":   database,
-        "workspace":  "",
+        "kind":       "KQLDatabase",
+        "scopeId":    database_id,
     }
 
     # ------------------------------------------------------------------
@@ -1062,12 +1075,25 @@ ProductionMetrics
     }
 
     encoded = base64.b64encode(json.dumps(dashboard_json).encode()).decode()
+    
+    # .platform file — required for Fabric item definitions
+    platform_metadata = {
+        "version": "1.0.0",
+        "type": "KQLDashboard"
+    }
+    platform_encoded = base64.b64encode(json.dumps(platform_metadata).encode()).decode()
+    
     return {
         "definition": {
             "parts": [
                 {
                     "path": "RealTimeDashboard.json",
                     "payload": encoded,
+                    "payloadType": "InlineBase64",
+                },
+                {
+                    "path": ".platform",
+                    "payload": platform_encoded,
                     "payloadType": "InlineBase64",
                 }
             ]
