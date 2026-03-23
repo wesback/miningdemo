@@ -38,6 +38,11 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
     Per official docs (confirmed from base64-decoded example payload), the
     RealTimeQueryset.json root MUST be {"queryset": {...}}.  The actual fields
     (version/dataSources/tabs) live inside that wrapper key.
+    
+    Each tab requires a dataSource oneOf object (matching dashboard schema):
+        • {"kind": "inline",    "dataSourceId": "<id>"}
+        • {"kind": "parameter", "parameterId": "<id>"}
+    
     Reference: https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition
     """
     errors = []
@@ -77,6 +82,8 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
                 errors.append(f"Missing 'dataSources[{i}].databaseName'")
 
     # Check tabs
+    # Each tab must have a dataSource oneOf object (matching the dashboard pattern)
+    ds_ids = set(ds.get("id") for ds in qs.get("dataSources", []))
     if "tabs" not in qs:
         errors.append("Missing 'tabs'")
     elif not isinstance(qs["tabs"], list):
@@ -89,8 +96,27 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
                 errors.append(f"Missing 'tabs[{i}].content'")
             if "title" not in tab:
                 errors.append(f"Missing 'tabs[{i}].title'")
-            if "dataSourceId" not in tab:
-                errors.append(f"Missing 'tabs[{i}].dataSourceId'")
+            # Flat dataSourceId is unsupported; must use nested dataSource object
+            if "dataSourceId" in tab:
+                errors.append(f"'tabs[{i}].dataSourceId' (flat) is unsupported; use nested 'dataSource' object")
+            # dataSource must be a oneOf: inline (dataSourceId) or parameter (parameterId)
+            if "dataSource" not in tab:
+                errors.append(f"Missing 'tabs[{i}].dataSource'")
+            elif not isinstance(tab["dataSource"], dict):
+                errors.append(f"'tabs[{i}].dataSource' must be object")
+            else:
+                ds_obj = tab["dataSource"]
+                kind = ds_obj.get("kind")
+                if kind not in ("inline", "parameter"):
+                    errors.append(f"'tabs[{i}].dataSource.kind' must be 'inline' or 'parameter', got '{kind}'")
+                elif kind == "inline":
+                    if "dataSourceId" not in ds_obj:
+                        errors.append(f"Missing 'tabs[{i}].dataSource.dataSourceId' (required for kind 'inline')")
+                    elif ds_obj["dataSourceId"] not in ds_ids:
+                        errors.append(f"'tabs[{i}].dataSource.dataSourceId' references unknown dataSource '{ds_obj['dataSourceId']}'")
+                elif kind == "parameter":
+                    if "parameterId" not in ds_obj:
+                        errors.append(f"Missing 'tabs[{i}].dataSource.parameterId' (required for kind 'parameter')")
     
     return errors
 

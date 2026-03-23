@@ -688,7 +688,10 @@ def build_queryset_definition(cluster_uri: str, database: str, queryset_name: st
                 "id": f"tab-{name}",
                 "content": body,
                 "title": name,
-                "dataSourceId": ds_id,
+                "dataSource": {
+                    "kind": "inline",
+                    "dataSourceId": ds_id,
+                },
             })
 
     if predictive_file.exists():
@@ -698,7 +701,10 @@ def build_queryset_definition(cluster_uri: str, database: str, queryset_name: st
                 "id": f"tab-pred-{slug}",
                 "content": body,
                 "title": f"[Predictive] {title}",
-                "dataSourceId": ds_id,
+                "dataSource": {
+                    "kind": "inline",
+                    "dataSourceId": ds_id,
+                },
             })
 
     if not tabs:
@@ -706,7 +712,10 @@ def build_queryset_definition(cluster_uri: str, database: str, queryset_name: st
             "id": "tab-empty",
             "content": "// No queries found — check kql/ directory",
             "title": "Empty",
-            "dataSourceId": ds_id,
+            "dataSource": {
+                "kind": "inline",
+                "dataSourceId": ds_id,
+            },
         })
 
     log.info("  KQL Queryset: %d individual query tabs", len(tabs))
