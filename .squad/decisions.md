@@ -995,3 +995,17 @@ Reference: https://learn.microsoft.com/rest/api/fabric/articles/item-management/
 
 > **The Fabric API can silently accept malformed item definitions.** A `201 Created` (or `200 OK`) response does NOT mean the item will render correctly in the UI. Always open the deployed item and verify it visually — especially for queryset tabs and dashboard tiles. Dry-run decoding (base64 → JSON inspection) catches structural issues before deployment, but the authoritative test is UI verification post-deploy.
 
+
+---
+
+## 2026-03-27: Queryset Tab `dataSourceId` Must Be Flat String (Dallas)
+
+**Context:** Live item inspection of queryset `db3dc49b-f1a1-42e2-b47a-3a7c3d3fc18c` via workflow logs and official MS docs payload decoding revealed a schema bug introduced by commit `d00fd37`.
+
+**Finding:** Commit `d00fd37` changed queryset tab datasource from the correct flat `"dataSourceId"` string to a nested `"dataSource": {"kind": "inline", "dataSourceId": "..."}` object. Fabric API accepts both (lenient), but the UI client only resolves the flat format — causing "Something went wrong" browser errors after successful deployment.
+
+Official MS docs tab schema (decoded from base64): `{"id": "...", "content": "...", "title": "...", "dataSourceId": "<id>"}` — no nested dataSource object.
+
+**Decision:** KQL Queryset tab datasource = flat `"dataSourceId"` string. RTD query datasource = nested `"dataSource"` object. These two item types use DIFFERENT schemas — never cross-apply.
+
+**Fix:** `deploy.py` + `validate_fabric_definitions.py` updated. Commit `c8476c6`. To apply to live item, run `update-queryset.yml` (5 min) or wait for `deploy-fabric.yml` to complete (triggered by push).
