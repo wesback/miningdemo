@@ -76,11 +76,11 @@ DEFAULT_INTERVAL_SEC = 10  # seconds between batches
 DEFAULT_BATCH_SIZE = 50  # events per batch
 ZONES = ["Zone-A", "Zone-B", "Zone-C"]
 
-# GPS coordinates centred on a fictional Pilbara (WA) mine site
+# GPS coordinates centred on a fictional Sudbury Basin (Ontario) mine site
 ZONE_COORDS: dict[str, tuple[float, float]] = {
-    "Zone-A": (-23.7011, 119.8045),
-    "Zone-B": (-23.7035, 119.8102),
-    "Zone-C": (-23.6988, 119.8150),
+    "Zone-A": (46.4917, -80.9930),
+    "Zone-B": (46.4885, -80.9865),
+    "Zone-C": (46.4950, -80.9800),
 }
 
 
@@ -263,7 +263,7 @@ def build_event(
     value: float,
 ) -> dict[str, Any]:
     """Construct a single sensor event as a JSON-serialisable dict."""
-    base_lat, base_lon = ZONE_COORDS.get(equipment.zone, (-23.70, 119.81))
+    base_lat, base_lon = ZONE_COORDS.get(equipment.zone, (46.49, -80.99))
     # Add small GPS jitter for haul trucks (they move)
     if equipment.equipment_type == "haul_truck":
         lat = base_lat + random.uniform(-0.002, 0.002)
