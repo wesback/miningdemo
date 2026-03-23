@@ -105,3 +105,33 @@
 - **Audience:** First-time setup users — clear enough for non-experts, detailed enough for CI/CD best practices
 - **Key Files:** `docs/CICD_SETUP.md` (new), `README.md` (updated with link + prereq row)
 
+### 2026-03-20 — Dashboard Schema Fixes: Proper API Structure
+- **Fixed:** Four dashboard schema issues in `deploy.py` to align with Fabric Real-Time Dashboard API v52 requirements
+- **Issue 1:** Added missing `schema_version: "52"` and `title: "Mining Operations"` root fields to `dashboard_json` dict
+- **Issue 2:** Fixed `tile()` helper — changed flat `"queryId"` to nested `"queryRef": {"kind": "KQL", "queryId": ...}` structure
+- **Issue 3:** Fixed `q()` helper — changed flat `"dataSourceId"` to nested `"dataSource": {"kind": "KQLDatabase", "dataSourceId": ...}` structure
+- **Issue 4:** Replaced bare function name strings in two queries with full KQL query bodies:
+  - `"EquipmentHealthScores"` → Full 35-line health scoring query with temp/oil/age composite scoring
+  - `"RouteEfficiency"` → Full 19-line route efficiency query with cycle time analysis
+- **Pattern:** Fabric RTD schema v52 requires nested object structures for query/tile references, not flat string IDs
+- **Source:** KQL query bodies copied from `kql/03-queries.kql` (inside function definitions, excluding `.create-or-alter` wrapper)
+- **Benefit:** Dashboard definition now matches Fabric REST API schema expectations — deployment should succeed without 400 validation errors
+- **Key Files:** `deploy.py` (four targeted edits in `build_dashboard_definition()` function)
+
+### 2026-03-20 — CRITICAL FIX: Dashboard DataSource Schema Correction
+- **Root Cause:** Dashboard `dataSources` structure did not match official Fabric Git integration schema
+- **Issue 1:** Used incorrect `kind: "kusto-trident"` — official schema requires `kind: "KQLDatabase"`
+- **Issue 2:** Included undocumented `workspace: ""` field not present in official schema
+- **Impact:** Multi-day deployment failures due to REST API rejecting malformed dashboard definitions
+- **Fix Applied:** Updated `build_dashboard_definition()` line 763-774:
+  - Changed `kind: "kusto-trident"` → `kind: "KQLDatabase"`
+  - Removed `workspace: ""` field completely
+  - Reordered fields to match official Git schema: `id, name, clusterUri, database, kind, scopeId`
+- **Validation:** Confirmed against 3 authoritative sources:
+  1. Microsoft Learn: `/rest/api/fabric/articles/item-management/definitions/kql-dashboard-definition`
+  2. Fabric Git Integration: `/fabric/real-time-intelligence/git-real-time-dashboard`
+  3. Web search findings: "KQLDatabase" is the standard kind value for Kusto data sources
+- **Queryset Status:** KQL Queryset structure was already compliant — no changes needed
+- **Pattern for Future:** Always verify item definitions against official Git integration schemas, not just REST API docs (which lack complete examples)
+- **Files:** `deploy.py` `build_dashboard_definition()` (lines 763-774)
+

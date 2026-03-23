@@ -414,6 +414,64 @@ if row_count > baseline_count:  # ← Correct: verifies delta
 
 ---
 
+### 2026-03-20: Dashboard Schema v52 Compliance Fixes
+**Agent:** Dallas (Fabric Expert)  
+**Type:** API Compliance / Deployment Fix  
+**Status:** ✅ Implemented
+
+**Decision:** Updated `deploy.py` dashboard definition to comply with Fabric Real-Time Dashboard API schema version 52 requirements. Four structural issues identified and corrected.
+
+**Issues Fixed:**
+1. **Root-Level Metadata:** Added required `schema_version: "52"` and `title: "Mining Operations"` fields
+2. **Tile Query References:** Converted flat `queryId` strings to nested `queryRef` objects with `kind: "KQL"` discriminator
+3. **Query Data Sources:** Converted flat `dataSourceId` strings to nested `dataSource` objects with `kind: "KQLDatabase"` discriminator
+4. **Inline Query Text:** Extracted and inlined full KQL query bodies for EquipmentHealthScores and RouteEfficiency (Fabric API does not resolve named functions)
+
+**Rationale:**
+- Schema evolution: Fabric v52 requires typed references with kind discriminators for extensibility
+- API enforcement: 400 validation errors on missing schema_version or legacy flat ID references
+- Maintainability: Inline queries ensure dashboard is deployable without pre-creating KQL functions
+
+**Related Files:** `deploy.py` (lines 703-709, 819-857, 880-894, 918-924), `kql/03-queries.kql`
+
+**Impact:** Dashboard now complies with v52 schema; ready for next deployment
+
+**Testing:** Python syntax verified; pending deployment validation (expect 200 OK)
+
+---
+
+### 2026-03-20: Remove DataFormat Enum from ingest_history.py
+**Agent:** Parker (Python Dev)  
+**Type:** SDK Compatibility / Bug Fix  
+**Status:** ✅ Implemented
+
+**Decision:** Removed `DataFormat` enum import from `activator/ingest_history.py` and replaced with plain string literals.
+
+**Problem:** Azure Kusto Ingest SDK 4.x no longer exposes `DataFormat` enum; runtime import failure:
+```
+cannot import name 'DataFormat' from 'azure.kusto.data'
+```
+
+**Solution:** Use string literals ("csv", "json", "parquet", "avro") — modern SDK standard
+
+**Changes:**
+1. Line 58: Removed `DataFormat` from import statement
+2. Line 228: Changed `data_format=DataFormat.CSV` to `data_format="csv"`
+
+**Rationale:**
+- Azure SDK 4.x accepts string literals; enums deprecated
+- Avoids version pinning that blocks security updates
+- No loss of type safety (invalid formats fail at ingestion with clear errors)
+- Consistent with Azure SDK design patterns
+
+**Related Files:** `activator/ingest_history.py`, `simulator/deploy_history.py`
+
+**Impact:** SDK import error resolved; ingest script now executable with current azure-kusto-ingest versions
+
+**Testing:** Import test passes; ready for integration testing
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

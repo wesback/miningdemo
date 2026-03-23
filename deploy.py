@@ -635,7 +635,7 @@ def _parse_predictive_queries(text: str) -> list[tuple[str, str]]:
     return queries
 
 
-def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]:
+def build_queryset_definition(cluster_uri: str, database: str, queryset_name: str = "MiningOps-Queries") -> dict[str, Any]:
     """Build the KQL Queryset definition with one tab per named query.
 
     Parses individual queries from the KQL files so each gets its own
@@ -694,9 +694,18 @@ def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]
     encoded = base64.b64encode(json.dumps(queryset_json).encode()).decode()
     
     # .platform file — required for Fabric item definitions
+    # Must follow the official Git integration schema structure
     platform_metadata = {
-        "version": "1.0.0",
-        "type": "KQLQueryset"
+        "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+        "metadata": {
+            "type": "KQLQueryset",
+            "displayName": queryset_name,
+            "description": "Mining Operations KQL Queries"
+        },
+        "config": {
+            "version": "2.0",
+            "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, f"mining-rti-queryset-{QUERYSET_NAME}"))
+        }
     }
     platform_encoded = base64.b64encode(json.dumps(platform_metadata).encode()).decode()
     
@@ -718,7 +727,7 @@ def build_queryset_definition(cluster_uri: str, database: str) -> dict[str, Any]
     }
 
 
-def build_dashboard_definition(cluster_uri: str, database: str, database_id: str) -> dict[str, Any]:
+def build_dashboard_definition(cluster_uri: str, database: str, database_id: str, dashboard_name: str = "Mining Operations") -> dict[str, Any]:
     """
     Build a Real-Time Dashboard definition with all pages and tiles.
 
@@ -1077,9 +1086,18 @@ ProductionMetrics
     encoded = base64.b64encode(json.dumps(dashboard_json).encode()).decode()
     
     # .platform file — required for Fabric item definitions
+    # Must follow the official Git integration schema structure
     platform_metadata = {
-        "version": "1.0.0",
-        "type": "KQLDashboard"
+        "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+        "metadata": {
+            "type": "KQLDashboard",
+            "displayName": dashboard_name,
+            "description": "Mining Operations Real-Time Dashboard"
+        },
+        "config": {
+            "version": "2.0",
+            "logicalId": str(uuid.uuid5(uuid.NAMESPACE_DNS, f"mining-rti-dashboard-{DASHBOARD_NAME}"))
+        }
     }
     platform_encoded = base64.b64encode(json.dumps(platform_metadata).encode()).decode()
     
@@ -1181,14 +1199,14 @@ def deploy(args: argparse.Namespace) -> None:
     # Step 5: Create KQL Queryset
     # -----------------------------------------------------------------------
     if query_uri:
-        queryset_payload = build_queryset_definition(query_uri, DATABASE_NAME)
+        queryset_payload = build_queryset_definition(query_uri, DATABASE_NAME, QUERYSET_NAME)
         client.create_item("kqlQuerysets", QUERYSET_NAME, queryset_payload)
 
     # -----------------------------------------------------------------------
     # Step 6: Create Real-Time Dashboard
     # -----------------------------------------------------------------------
     if query_uri:
-        dashboard_payload = build_dashboard_definition(query_uri, DATABASE_NAME, database_id)
+        dashboard_payload = build_dashboard_definition(query_uri, DATABASE_NAME, database_id, DASHBOARD_NAME)
         client.create_item("kqlDashboards", DASHBOARD_NAME, dashboard_payload)
 
     # -----------------------------------------------------------------------
