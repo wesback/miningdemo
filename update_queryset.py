@@ -44,7 +44,7 @@ def main():
 
     # Get authentication token
     token = get_token(args)
-    client = FabricClient(args.workspace_id, token)
+    client = FabricClient(token, args.workspace_id)
 
     # Find the existing queryset
     log.info("Finding existing KQL Queryset '%s'...", QUERYSET_NAME)
