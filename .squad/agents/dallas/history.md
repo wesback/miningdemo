@@ -121,3 +121,22 @@ All patterns follow Microsoft best practices. Documentation supports both expert
 **Durable Finding:** Fabric schema validation MUST include local dry-run decoding before any API submission. Pre-deployment checklist now includes `python3 -c "from deploy import ..."` to verify payloads.
 
 **Files:** `deploy.py` (functions `build_queryset_definition()`, `build_dashboard_definition()`)
+
+---
+
+### 2026-03-26: Dashboard schema_version Bump 52 → 69
+
+**Error:** `Missing migration for dashboard version 52... Required version: 69 Received version: 52`
+
+**Root cause:** Fabric RTD client incremented its minimum accepted `schema_version` from 52 to 69. The payload shape was correct; only the version integer was stale.
+
+**Fix — three surgical changes:**
+1. `deploy.py` line 1118: `"schema_version": 52` → `"schema_version": 69`
+2. `deploy.py` lines 785, 843: inline comments updated from v52 → v69
+3. `validate_fabric_definitions.py`: Updated all v52 → v69 references; upgraded the type-only check to also assert the exact value (`!= 69` emits error). This value-assertion means the next Fabric version bump will be caught locally before deployment.
+
+**Verdict:** Pure version bump. No structural changes to dataSources/pages/tiles/queries/baseQueries/parameters.
+
+**Validation:** `python3 validate_fabric_definitions.py` → ✅ PASSED (`schema_version=69`, 4 pages, 16 tiles, 16 queries, 29 queryset tabs)
+
+**Durable pattern:** When a remote client enforces an exact version integer (not just "must be int"), the local validator should assert the value explicitly — `elif version != EXPECTED: error(...)`. Saves a round-trip deployment failure.

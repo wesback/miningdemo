@@ -782,7 +782,7 @@ def build_dashboard_definition(cluster_uri: str, database: str, database_id: str
     All IDs are deterministic RFC 4122 UUIDs (uuid5) so re-deploys never
     create duplicates.  Tiles live at the ROOT level with a ``pageId``
     back-reference — NOT nested inside pages.  dataSources.kind is
-    ``KQLDatabase`` as required by the Fabric Git integration schema (v52).
+    ``KQLDatabase`` as required by the Fabric Git integration schema (v69).
     """
     # ------------------------------------------------------------------
     # Deterministic UUIDs — same inputs always produce the same UUIDs so
@@ -840,7 +840,7 @@ def build_dashboard_definition(cluster_uri: str, database: str, database_id: str
     # Queries — every entry MUST include "usedVariables" (even if empty).
     # ------------------------------------------------------------------
     def q(key: str, text: str) -> dict[str, Any]:
-        # dataSourceId is a flat field per the Fabric RTD schema v52 spec.
+        # dataSourceId is a flat field per the Fabric RTD schema v69 spec.
         # A nested "dataSource" object with kind="inline" is not valid.
         return {
             "id":            q_id[key],
@@ -1115,7 +1115,7 @@ ProductionMetrics
     ]
 
     dashboard_json = {
-        "schema_version": 52,           # integer, not string — Fabric RTD schema requires int
+        "schema_version": 69,           # integer, not string — Fabric RTD schema requires int
         "title":        "Mining Operations",
         "autoRefresh":  {"enabled": True, "interval": 30},
         "dataSources":  [data_source],

@@ -810,3 +810,39 @@ RESULT: ✅ PASSED
 Any team member can now run validator as pre-deployment smoke test to catch structural regressions before API submission.
 
 ---
+
+---
+
+## 2026-03-23: Dashboard schema_version Bumped 52 → 69 (Dallas)
+
+**Date:** 2026-03-23  
+**Agent:** Dallas (Fabric Expert)  
+**Type:** Deployment Fix  
+**Status:** ✅ Implemented
+
+### Context
+
+Fabric RTD client rejected dashboard payload at load time:
+```
+Missing migration for dashboard version 52... Required version: 69
+```
+
+### Decision
+
+Bump `schema_version` in `deploy.py` `build_dashboard_definition()` from `52` to `69`. No structural changes — Fabric incremented its minimum required version; payload shape (dataSources/pages/tiles/queries/baseQueries/parameters) already matches v69.
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `deploy.py` | `"schema_version": 52` → `69`; two comment references updated |
+| `.squad/agents/lambert/validate_fabric_definitions.py` | All v52 → v69 refs; added exact-value assertion to catch future version drift locally |
+
+### Verification
+
+- ✅ Local validator: `python3 .squad/agents/lambert/validate_fabric_definitions.py` passed
+- ✅ Live deployment: workspace `c7cc9e30-5045-4a5f-8f58-fdb3d1092589` → dashboard updated end-to-end
+
+### Implication for Future Version Bumps
+
+Validator now enforces exact schema_version value. When Fabric increments again, validator will fail locally (not silently at deploy time). To upgrade: update `schema_version` in `deploy.py` and the exact-value check in `validate_fabric_definitions.py`.
