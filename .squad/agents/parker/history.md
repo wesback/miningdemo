@@ -125,3 +125,26 @@ python3 deploy.py --workspace-id <GUID> --tenant-id <GUID> --client-id <GUID> --
 **Example workspaces accessible:**
 - `c7cc9e30-5045-4a5f-8f58-fdb3d1092589` - MiningRTI-Demo (has capacity)
 - `ea9af2a6-9459-4019-8c7a-e5e45dcc616f` - My workspace (Personal, no capacity)
+
+### March 27, 2026: KQL Queryset Wrapper Root Cause — Parallel Investigation Confirms Dallas Finding
+Parker traced the queryset generation pipeline in `deploy.py` and independently confirmed the root cause of empty KQL queryset rendering: the missing outer `"queryset"` wrapper.
+
+**Investigation Path:**
+- Traced `build_queryset_definition()` generation logic
+- Verified commit `5c515ff` removed the wrapper incorrectly
+- Cross-checked against official Microsoft Learn documentation
+- Confirmed wrapper is mandatory in canonical base64 example
+
+**Key Validation Rule Established:**
+The authoritative test for schema changes is UI verification post-deployment. HTTP success does NOT guarantee correct rendering. Local debugging approach:
+```bash
+python3 -c "import base64,json; print(json.dumps(json.loads(base64.b64decode('<payload>')), indent=2))"
+```
+This catches structural issues before deployment.
+
+**Decision Merged:** `.squad/decisions.md` now consolidates both Dallas's and Parker's independent investigations and documents the cross-agent learning.
+
+**Files Modified:**
+- `deploy.py`: restored `queryset` wrapper in `build_queryset_definition()`
+
+This parallel investigation validates the root cause and strengthens confidence in the fix.

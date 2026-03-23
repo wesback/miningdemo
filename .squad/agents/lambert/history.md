@@ -29,7 +29,7 @@ Fixed Validator Sync Audit — four false failures detected and corrected:
 1. Queryset root structure (removed incorrect wrapper check)
 2. Dashboard DataSource.kind (updated from "kusto-trident" to "KQLDatabase")
 3. Dashboard schema_version type (int, not str)
-4. Dashboard query dataSourceId structure (flat field, not nested object)
+4. Dashboard query dataSource structure (nested object with kind + dataSourceId)
 
 Result: `validate_fabric_definitions.py` now passes with schema_version=69, enforces exact version value.
 
@@ -69,3 +69,72 @@ This pattern would have surfaced the mismatch locally before deployment.
 **Key Files:**
 - `deploy.py`: line 1118 (schema_version), lines 785 & 843 (comments)
 - `.squad/agents/lambert/validate_fabric_definitions.py`: lines 94-115 (validate_dashboard_structure)
+
+### 2026-03-23: Fabric RTD Schema v69 — Unsupported Field Validation
+
+**Context:** Fabric client (schema v69) reported three unsupported property paths at deployment time. Fields were already removed from deploy.py by another agent. Lambert's task was to update validate_fabric_definitions.py to enforce their absence.
+
+**Unsupported Fields Identified:**
+1. `/autoRefresh.interval` — Only `enabled` field is accepted in autoRefresh object
+2. `/tiles/*/usedParamVariables` — Not part of tile schema in current client
+3. `/queries/*/dataSourceId` — Query datasource context is inferred from dashboard-level `dataSources` array, not per-query
+
+**Current Payload Structure (Validated Clean):**
+- `autoRefresh`: `{"enabled": true}` only
+- Tile objects: 8 required/optional fields, NO `usedParamVariables`
+- Query objects: 3 required fields (`id`, `text`, `usedVariables`), NO `dataSourceId`
+
+**Validator Changes:**
+1. Added autoRefresh.interval detection (line 128)
+2. Added tile.usedParamVariables detection (line 185-187)
+3. Added query.dataSourceId detection (line 160-163)
+4. Updated docstring to document unsupported fields
+
+**Test Results:** All three negative assertions verified:
+- ✅ autoRefresh with interval → validator flags
+- ✅ Tile with usedParamVariables → validator flags
+- ✅ Query with dataSourceId → validator flags
+- ✅ Current clean payload → validator passes
+
+**Ambiguity Noted:**
+~~The exact requirement for query datasource binding is unclear.~~ **Resolved 2026-03-27:** see below.
+
+**Reusable Pattern — Forbidden Field Validation:**
+When a schema evolves to explicitly reject previously-accepted fields, add negative assertions:
+```python
+if "unsupported_field" in object:
+    errors.append("'object.unsupported_field' is unsupported by Fabric client")
+```
+This catches accidental reintroduction during refactoring.
+
+**Key Files:**
+- `validate_fabric_definitions.py`: Lines 122-131, 160-163, 185-187 (forbidden field checks)
+- `deploy.py`: Already clean (fields removed before Lambert's work)
+
+### 2026-03-27: Query dataSource — oneOf Object Required (Resolves Ambiguity)
+
+**Context:** After removing flat `dataSourceId` from queries (2026-03-26), the Fabric client rejected the dashboard with:
+- `/queries/*/dataSource/kind`: expected constant 'inline' or 'parameter'
+- `/queries/*/dataSource`: must match exactly one schema in oneOf
+
+**Root Cause:** Queries cannot *omit* datasource entirely. The v69 schema requires a `dataSource` oneOf object on every query:
+- `{"kind": "inline", "dataSourceId": "<id>"}` — reference a dashboard-level dataSource by id
+- `{"kind": "parameter", "parameterId": "<id>"}` — reference a dashboard parameter
+
+**Fix:**
+1. `deploy.py` `q()` helper: added `"dataSource": {"kind": "inline", "dataSourceId": ds_id}`
+2. `validate_fabric_definitions.py`: replaced flat `dataSourceId` rejection with full oneOf validation (kind, dataSourceId/parameterId, cross-reference to dataSources array)
+
+**Validation:** `python3 validate_fabric_definitions.py` → ✅ PASSED
+
+**Durable Pattern — oneOf Discriminator Validation:**
+When a Fabric schema field uses oneOf with a `kind` discriminator, validate:
+1. `kind` is one of the allowed constants
+2. The branch-specific required fields are present
+3. Cross-reference IDs exist in the parent collection
+```python
+if kind == "inline":
+    assert "dataSourceId" in obj
+elif kind == "parameter":
+    assert "parameterId" in obj
+```

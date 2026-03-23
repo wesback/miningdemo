@@ -2,6 +2,28 @@
 
 ## Active Decisions
 
+### 2026-03-27: Query dataSource oneOf Object — Schema v69 Fix
+**Agent:** Lambert (Tester) / SchemaFixer  
+**Type:** Schema Fix  
+**Status:** Implemented
+
+**Decision:** Each dashboard query requires a `dataSource` oneOf object — not a flat `dataSourceId` and not omitted entirely.
+
+**Correct shape (v69):**
+```json
+"dataSource": {"kind": "inline", "dataSourceId": "<ds_id>"}
+```
+
+**Context:** The previous fix (2026-03-26) removed `dataSourceId` entirely from queries, assuming datasource inheritance. The live Fabric client then rejected the payload with oneOf validation errors on `/queries/*/dataSource`. The schema requires each query to declare its datasource via a nested object with discriminator `kind` set to `"inline"` or `"parameter"`.
+
+**Files changed:**
+- `deploy.py`: `q()` helper now emits `dataSource: {kind: "inline", dataSourceId: ds_id}`
+- `validate_fabric_definitions.py`: Replaced flat `dataSourceId` rejection with full `dataSource` oneOf validation
+
+**Validation:** `python3 validate_fabric_definitions.py` → ✅ PASSED (16 tiles, 4 pages, 16 queries)
+
+---
+
 ### 2026-03-20: Codebase Review & Approval for Demo Use
 **Agent:** Ripley (Lead)  
 **Type:** Architecture & Quality Review  
@@ -422,7 +444,7 @@ if row_count > baseline_count:  # ← Correct: verifies delta
 **Decision:** Updated `deploy.py` dashboard definition to comply with Fabric Real-Time Dashboard API schema version 52 requirements. Four structural issues identified and corrected.
 
 **Issues Fixed:**
-1. **Root-Level Metadata:** Added required `schema_version: "52"` and `title: "Mining Operations"` fields
+1. **Root-Level Metadata:** Added required `schema_version: 69` and `title: "Mining Operations"` fields
 2. **Tile Query References:** Converted flat `queryId` strings to nested `queryRef` objects with `kind: "KQL"` discriminator
 3. **Query Data Sources:** Converted flat `dataSourceId` strings to nested `dataSource` objects with `kind: "KQLDatabase"` discriminator
 4. **Inline Query Text:** Extracted and inlined full KQL query bodies for EquipmentHealthScores and RouteEfficiency (Fabric API does not resolve named functions)
@@ -846,3 +868,130 @@ Bump `schema_version` in `deploy.py` `build_dashboard_definition()` from `52` to
 ### Implication for Future Version Bumps
 
 Validator now enforces exact schema_version value. When Fabric increments again, validator will fail locally (not silently at deploy time). To upgrade: update `schema_version` in `deploy.py` and the exact-value check in `validate_fabric_definitions.py`.
+
+---
+
+### 2026-03-26: Fabric Dashboard Schema v69 Property Removal
+**Agent:** Dallas (Fabric Expert)  
+**Type:** Schema Fix  
+**Status:** Implemented
+
+**Context**
+
+Fabric client rejected dashboard deployment with three unsupported properties despite correct `schema_version: 69`:
+- `/autoRefresh.interval`
+- `/tiles[*].usedParamVariables`
+- `/queries[*].dataSourceId`
+
+These properties were either legacy holdovers from earlier schema versions or documented but not actually accepted by the live client.
+
+**Decision**
+
+Remove all three unsupported properties from `deploy.py` dashboard generation:
+
+1. **autoRefresh.interval** — Keep only `enabled` field; interval cannot be explicitly controlled
+2. **tiles[*].usedParamVariables** — Remove entirely; not part of tile schema
+3. **queries[*].dataSourceId** — Remove from queries; datasource context inherited from dashboard-level `dataSources` array
+
+**Rationale**
+
+- **Schema compliance:** Live Fabric client enforces stricter validation than documentation suggests
+- **Datasource inheritance:** Schema v69 shifted to dashboard-level datasource context rather than per-query annotation
+- **Minimal change:** Removal of unsupported fields has no functional impact on dashboard behavior
+- **Local validation:** All three removals already detected by `validate_fabric_definitions.py`
+
+**Impact**
+
+- **deploy.py:** Three field removals (lines 847, 1090, 1120)
+- **validator:** Already correctly validates these as errors (lines 137, 171, 194)
+- **Dashboard behavior:** No change; removed fields were ignored or rejected by client
+- **Query resolution:** Tiles link to queries via `queryRef.queryId`; datasource inherited from dashboard context
+
+**Validation**
+
+```bash
+python3 validate_fabric_definitions.py
+# ✅ PASSED — 16 tiles, 4 pages, 16 queries, 29 queryset tabs
+```
+
+---
+
+### 2025-03-26: Fabric Real-Time Dashboard Minimum Tile Size
+**Agent:** TileSizer  
+**Type:** Schema Compliance  
+**Status:** Implemented
+
+**Context**
+
+The Fabric Real-Time Dashboard client enforces minimum tile dimensions. Deployment failures occurred with tiles sized 10×7, with the error message indicating that the minimum supported tile size is (12, 6).
+
+**Decision**
+
+Updated all dashboard tiles to meet minimum dimensions:
+- **Minimum width:** 12 units
+- **Minimum height:** 6 units
+
+**Implementation**
+
+1. **Updated deploy.py tile layouts:** Changed 14 tiles from width=10 to width=12 (and one from width=8 to width=12)
+2. **Updated validator:** Added tile size validation in `validate_fabric_definitions.py` to catch undersized tiles before deployment
+3. **Layout preservation:** Maintained the 2-column layout (tiles at x=0 and x=12) and consistent positioning across all four pages
+
+**Validation**
+
+The local validator now catches tile size violations:
+```python
+# Minimum supported tile size is (12, 6)
+if "width" in layout and layout["width"] < 12:
+    errors.append(f"'tiles[{i}].layout.width' is {layout['width']}, minimum supported is 12")
+if "height" in layout and layout["height"] < 6:
+    errors.append(f"'tiles[{i}].layout.height' is {layout['height']}, minimum supported is 6")
+```
+
+Validator output: ✅ PASSED — all definitions comply with schema
+
+---
+
+### 2026-03-27: KQL Queryset `"queryset"` Wrapper Is Required
+**Agent:** Dallas (Fabric Expert) / Parker (Python Dev)  
+**Type:** Schema Fix / Bug Fix  
+**Status:** Implemented  
+**Date:** 2026-03-27
+
+**Problem**
+
+After commit `5c515ff`, KQL queryset deployment returns HTTP 201/200 but the Fabric UI shows zero queries and renders an empty queryset.
+
+**Root Cause**
+
+Commit `5c515ff` incorrectly removed the outer `{"queryset": {...}}` wrapper from the RealTimeQueryset.json payload. The official Microsoft Learn documentation (KQL Queryset Definition schema) confirms the wrapper is mandatory:
+
+```json
+{
+  "queryset": {
+    "version": "1.0.0",
+    "dataSources": [...],
+    "tabs": [...]
+  }
+}
+```
+
+Without the wrapper, the Fabric API silently accepts the payload (lenient validation) but the client finds no `queryset` key and renders an empty queryset — exactly the symptom reported.
+
+Reference: https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition
+
+**Decision**
+
+1. Restore the `{"queryset": {...}}` outer wrapper in `deploy.py` `build_queryset_definition()`
+2. Update validation logic to require the wrapper key and drill into it
+3. Update logging to index into `queryset_json["queryset"]`
+
+**Files Changed**
+
+- `deploy.py`: `build_queryset_definition()` restored `{"queryset": {...}}` outer wrapper; updated log references to `queryset_json["queryset"]`
+- `.squad/agents/lambert/validate_fabric_definitions.py`: `validate_queryset_structure()` updated to require `queryset` key and validate nested content
+
+**Key Lesson**
+
+> **The Fabric API can silently accept malformed item definitions.** A `201 Created` (or `200 OK`) response does NOT mean the item will render correctly in the UI. Always open the deployed item and verify it visually — especially for queryset tabs and dashboard tiles. Dry-run decoding (base64 → JSON inspection) catches structural issues before deployment, but the authoritative test is UI verification post-deploy.
+

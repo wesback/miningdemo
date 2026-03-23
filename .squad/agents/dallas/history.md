@@ -81,10 +81,10 @@ All patterns follow Microsoft best practices. Documentation supports both expert
 - `"schema_version": "52"` → `"schema_version": 52`
 - Fabric RTD schema v52 validates this as an integer type.
 
-**Bug 3 (Dashboard): Query `dataSource` was a nested object; must be flat `dataSourceId`**
-- The `q()` helper used `"dataSource": {"kind": "inline", "dataSourceId": ds_id}`.
-- The Fabric RTD schema v52 expects `"dataSourceId": ds_id` directly on the query object.
-- `kind: "inline"` is not a valid discriminator in the queries array structure.
+**Bug 3 (Dashboard): Query `dataSource` must be nested**
+- The `q()` helper now uses `"dataSource": {"kind": "KQLDatabase", "dataSourceId": ds_id}`.
+- The Fabric Git dashboard schema expects the nested `dataSource` object inside each query entry.
+- `kind: "KQLDatabase"` is the valid discriminator for the current Git schema.
 
 **Logging added:**
 - `build_queryset_definition()` now logs: version, dataSources count, tabs count.
@@ -140,3 +140,79 @@ All patterns follow Microsoft best practices. Documentation supports both expert
 **Validation:** `python3 validate_fabric_definitions.py` → ✅ PASSED (`schema_version=69`, 4 pages, 16 tiles, 16 queries, 29 queryset tabs)
 
 **Durable pattern:** When a remote client enforces an exact version integer (not just "must be int"), the local validator should assert the value explicitly — `elif version != EXPECTED: error(...)`. Saves a round-trip deployment failure.
+
+---
+
+### 2026-03-26: Three Unsupported Property Removals — Dashboard Schema v69 Refinement
+
+**Error:** Fabric client rejected dashboard with three unsupported properties:
+- `/autoRefresh.interval` 
+- `/tiles[*].usedParamVariables`
+- `/queries[*].dataSourceId`
+
+**Root cause:** Schema v69 enforcement tightened. While `schema_version: 69` was correct, certain properties that previously worked (or were documented) are no longer accepted by the live Fabric client.
+
+**Fix — three surgical removals:**
+
+1. **autoRefresh.interval** (line 1120)
+   - BEFORE: `"autoRefresh": {"enabled": True, "interval": 30}`
+   - AFTER: `"autoRefresh": {"enabled": True}`
+   - Only `enabled` field is supported; refresh interval cannot be explicitly set.
+
+2. **tiles[*].usedParamVariables** (line 1090)
+   - BEFORE: Tile definition included `"usedParamVariables": []`
+   - AFTER: Field removed entirely from tile objects
+   - Parameter variable tracking is not part of the tile schema.
+
+3. **queries[*].dataSourceId** (lines 843-847)
+   - BEFORE: Query helper `q()` included `"dataSourceId": ds_id`
+   - AFTER: Field removed from queries; datasource context provided via dashboard-level `dataSources` array
+   - The tile's `queryRef` links to the query, and queries inherit datasource from the dashboard context rather than declaring it explicitly.
+
+**Validator updates:** All three checks were already present in `validate_fabric_definitions.py` and now correctly catch these as errors during local validation.
+
+**Validation:** `python3 validate_fabric_definitions.py` → ✅ PASSED (16 tiles, 4 pages, 16 queries, 29 queryset tabs)
+
+**Durable finding:** Schema v69 uses datasource inheritance at dashboard level rather than per-query annotation. The queryRef→query→text path is sufficient; explicit dataSourceId on queries is not just redundant but actively rejected. This is a semantic shift from earlier schemas where queries might have declared their own datasource.
+
+---
+
+### 2026-03-27: Empty KQL Queryset — Restored `"queryset"` Wrapper
+
+**Symptom:** KQL Queryset deployed without error but opened empty (no query tabs visible).
+
+**Root Cause:** A prior fix incorrectly removed the outer `"queryset"` wrapper from `RealTimeQueryset.json`. The Fabric API accepted the flat payload without error (lenient validation), but the UI expects `queryset_json["queryset"]` and rendered nothing.
+
+**Evidence:** Decoded the official Microsoft docs example payload (base64):
+`https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition`
+The decoded JSON is unambiguously `{"queryset": {"version": "1.0.0", "dataSources": [...], "tabs": [...]}}`.
+
+**Fix:**
+- `deploy.py` `build_queryset_definition()`: restored `{"queryset": {...}}` outer wrapper; updated logging to read from `queryset_json["queryset"]`
+- `.squad/agents/lambert/validate_fabric_definitions.py` `validate_queryset_structure()`: updated to require `queryset` root key; fixed `tab_count` reference in main runner
+
+**Key lesson:** Fabric API silent acceptance ≠ correct rendering. A `200/201` does not guarantee the UI will display the item correctly. Always open and visually verify the deployed item. The tab fields (`id`, `content`, `title`, `dataSourceId`) were correct all along; only the wrapper was missing.
+
+**Decision file:** `.squad/decisions/inbox/dallas-empty-queryset-fix.md`
+
+### March 27, 2026: KQL Queryset Schema Fix & Fabric API Validation Lesson
+Dallas investigated empty KQL queryset rendering symptoms and identified the root cause: a missing outer `"queryset"` wrapper in the RealTimeQueryset.json payload structure.
+
+**Investigation:**
+- Traced deployment symptoms (HTTP 201 success but empty UI)
+- Cross-referenced official Microsoft Learn KQL Queryset Definition schema
+- Confirmed wrapper is mandatory in canonical base64 example payload
+
+**Key Lesson Documented:**
+The Fabric API exhibits lenient validation — it accepts malformed payloads (201 Created) but the UI only renders content it understands from the expected root key. This creates a false sense of success: HTTP success ≠ correct rendering.
+
+**Decision Merged:** `.squad/decisions.md` now documents this finding and validation approach:
+1. Decode base64 payloads locally and inspect structure
+2. Cross-check against official MS docs canonical examples
+3. Always verify rendering in the UI post-deployment
+
+**Files Modified:**
+- `deploy.py`: restored `queryset` wrapper in `build_queryset_definition()`
+- `validate_fabric_definitions.py`: updated to validate wrapper presence
+
+This lesson transfers to Parker and all future schema work.

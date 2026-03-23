@@ -35,13 +35,18 @@ from pathlib import Path
 def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
     """Validate KQL Queryset structure against official schema.
 
-    Per official docs, the RealTimeQueryset.json payload has root fields
-    version/dataSources/tabs with NO outer "queryset" wrapper key.
+    Per official docs (confirmed from base64-decoded example payload), the
+    RealTimeQueryset.json root MUST be {"queryset": {...}}.  The actual fields
+    (version/dataSources/tabs) live inside that wrapper key.
+    Reference: https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition
     """
     errors = []
 
-    # Root fields are version/dataSources/tabs — no outer "queryset" wrapper.
-    qs = queryset_json
+    # Root must be {"queryset": {...}} — the wrapper key is required.
+    if "queryset" not in queryset_json:
+        errors.append("Missing root 'queryset' wrapper — RealTimeQueryset.json must be {\"queryset\": {...}}")
+        return errors
+    qs = queryset_json["queryset"]
 
     # Check version
     if "version" not in qs:
@@ -96,8 +101,15 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
     Key v69 behaviours:
     - schema_version is an integer (69), not a string.
     - dataSources[i].kind must be "KQLDatabase" (Git integration schema).
-    - queries[i] uses a flat "dataSourceId" field, not a nested "dataSource" object.
+    - queries[i].dataSource is a oneOf object:
+        • {"kind": "inline",    "dataSourceId": "<id>"}
+        • {"kind": "parameter", "parameterId": "<id>"}
     - queryRef uses kind="query".
+    
+    Fabric client unsupported fields (as of 2026-03-26):
+    - /autoRefresh.interval is rejected — only "enabled" is accepted
+    - /tiles/*/usedParamVariables is rejected — not part of tile schema
+    - /queries/*/dataSourceId (flat, top-level) is rejected; use nested dataSource object
     """
     errors = []
 
@@ -106,13 +118,24 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
     for field in required_fields:
         if field not in dashboard_json:
             errors.append(f"Missing required field '{field}'")
-
+    
     # schema_version must be the integer 69 (Fabric client requires exactly this value)
     if "schema_version" in dashboard_json:
         if not isinstance(dashboard_json["schema_version"], int):
             errors.append(f"'schema_version' must be int, got {type(dashboard_json['schema_version']).__name__}")
         elif dashboard_json["schema_version"] != 69:
             errors.append(f"'schema_version' must be 69, got {dashboard_json['schema_version']}")
+
+    # Validate autoRefresh — only "enabled" is supported; "interval" is unsupported.
+    if "autoRefresh" in dashboard_json:
+        auto_refresh = dashboard_json["autoRefresh"]
+        if not isinstance(auto_refresh, dict):
+            errors.append("'autoRefresh' must be object")
+        else:
+            if "interval" in auto_refresh:
+                errors.append("'autoRefresh.interval' is unsupported by Fabric client (only 'enabled' is accepted)")
+            if "enabled" not in auto_refresh:
+                errors.append("Missing 'autoRefresh.enabled'")
 
     # Validate dataSources
     if "dataSources" in dashboard_json:
@@ -123,8 +146,6 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
                 if "kind" not in ds:
                     errors.append(f"Missing 'dataSources[{i}].kind'")
                 elif ds["kind"] != "KQLDatabase":
-                    # Fabric Git integration schema v69 requires "KQLDatabase".
-                    # "kusto-trident" was the legacy REST API value — no longer correct.
                     errors.append(f"'dataSources[{i}].kind' should be 'KQLDatabase', got '{ds['kind']}'")
 
                 required_ds_fields = ["id", "name", "scopeId", "clusterUri", "database"]
@@ -132,7 +153,9 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
                     if field not in ds:
                         errors.append(f"Missing 'dataSources[{i}].{field}'")
 
-    # Validate queries — v69 uses flat "dataSourceId", NOT a nested "dataSource" object
+    # Validate queries
+    # Each query must have a dataSource oneOf object (not a flat dataSourceId).
+    ds_ids = set(ds.get("id") for ds in dashboard_json.get("dataSources", []))
     if "queries" in dashboard_json:
         if not isinstance(dashboard_json["queries"], list):
             errors.append("'queries' must be array")
@@ -140,13 +163,32 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
             for i, q in enumerate(dashboard_json["queries"]):
                 if "id" not in q:
                     errors.append(f"Missing 'queries[{i}].id'")
-                if "dataSourceId" not in q:
-                    errors.append(f"Missing 'queries[{i}].dataSourceId'")
+                # Flat dataSourceId is rejected by Fabric v69; must use nested dataSource object
+                if "dataSourceId" in q:
+                    errors.append(f"'queries[{i}].dataSourceId' (flat) is unsupported; use nested 'dataSource' object")
+                # dataSource must be a oneOf: inline (dataSourceId) or parameter (parameterId)
+                if "dataSource" not in q:
+                    errors.append(f"Missing 'queries[{i}].dataSource'")
+                elif not isinstance(q["dataSource"], dict):
+                    errors.append(f"'queries[{i}].dataSource' must be object")
+                else:
+                    ds_obj = q["dataSource"]
+                    kind = ds_obj.get("kind")
+                    if kind not in ("inline", "parameter"):
+                        errors.append(f"'queries[{i}].dataSource.kind' must be 'inline' or 'parameter', got '{kind}'")
+                    elif kind == "inline":
+                        if "dataSourceId" not in ds_obj:
+                            errors.append(f"Missing 'queries[{i}].dataSource.dataSourceId' (required for kind 'inline')")
+                        elif ds_obj["dataSourceId"] not in ds_ids:
+                            errors.append(f"'queries[{i}].dataSource.dataSourceId' references unknown dataSource '{ds_obj['dataSourceId']}'")
+                    elif kind == "parameter":
+                        if "parameterId" not in ds_obj:
+                            errors.append(f"Missing 'queries[{i}].dataSource.parameterId' (required for kind 'parameter')")
                 if "text" not in q:
                     errors.append(f"Missing 'queries[{i}].text'")
                 if "usedVariables" not in q:
                     errors.append(f"Missing 'queries[{i}].usedVariables'")
-    
+
     # Validate tiles
     if "tiles" in dashboard_json:
         if not isinstance(dashboard_json["tiles"], list):
@@ -154,7 +196,7 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
         else:
             page_ids = set(p.get("id") for p in dashboard_json.get("pages", []))
             query_ids = set(q.get("id") for q in dashboard_json.get("queries", []))
-            
+
             for i, tile in enumerate(dashboard_json["tiles"]):
                 if "id" not in tile:
                     errors.append(f"Missing 'tiles[{i}].id'")
@@ -163,6 +205,10 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
                 elif tile["pageId"] not in page_ids:
                     errors.append(f"'tiles[{i}].pageId' references non-existent page '{tile['pageId']}'")
                 
+                # usedParamVariables is UNSUPPORTED by Fabric client (2026-03-23)
+                if "usedParamVariables" in tile:
+                    errors.append(f"'tiles[{i}].usedParamVariables' is unsupported by Fabric client")
+
                 if "queryRef" not in tile:
                     errors.append(f"Missing 'tiles[{i}].queryRef'")
                 elif not isinstance(tile["queryRef"], dict):
@@ -176,7 +222,7 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
                         errors.append(f"Missing 'tiles[{i}].queryRef.queryId'")
                     elif tile["queryRef"]["queryId"] not in query_ids:
                         errors.append(f"'tiles[{i}].queryRef.queryId' references non-existent query '{tile['queryRef']['queryId']}'")
-                
+
                 if "layout" not in tile:
                     errors.append(f"Missing 'tiles[{i}].layout'")
                 elif not isinstance(tile["layout"], dict):
@@ -185,7 +231,15 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
                     for coord in ["x", "y", "width", "height"]:
                         if coord not in tile["layout"]:
                             errors.append(f"Missing 'tiles[{i}].layout.{coord}'")
-    
+                    
+                    # Validate minimum tile size (Fabric client requirement as of 2025-03-26)
+                    # Minimum supported tile size is (12, 6)
+                    layout = tile["layout"]
+                    if "width" in layout and layout["width"] < 12:
+                        errors.append(f"'tiles[{i}].layout.width' is {layout['width']}, minimum supported is 12")
+                    if "height" in layout and layout["height"] < 6:
+                        errors.append(f"'tiles[{i}].layout.height' is {layout['height']}, minimum supported is 6")
+
     # Validate pages
     if "pages" in dashboard_json:
         if not isinstance(dashboard_json["pages"], list):
@@ -196,7 +250,7 @@ def validate_dashboard_structure(dashboard_json: Dict[str, Any]) -> List[str]:
                     errors.append(f"Missing 'pages[{i}].id'")
                 if "name" not in page:
                     errors.append(f"Missing 'pages[{i}].name'")
-    
+
     return errors
 
 
@@ -295,7 +349,7 @@ def main() -> int:
                     print(f"  ❌ SCHEMA: {e}")
                 all_errors.extend(qs_body_errors)
             else:
-                tab_count = len(qs_json.get("tabs", []))
+                tab_count = len(qs_json.get("queryset", {}).get("tabs", []))
                 print(f"  ✅ Schema valid ({tab_count} query tabs)")
     except Exception as exc:
         msg = f"Queryset build failed: {exc}"
