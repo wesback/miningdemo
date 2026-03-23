@@ -103,9 +103,12 @@ jobs:
             echo "- Source: \`kql/\` directory" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
-            echo "1. Open the KQL Queryset in Fabric" >> $GITHUB_STEP_SUMMARY
-            echo "2. Verify all query tabs load without errors" >> $GITHUB_STEP_SUMMARY
-            echo "3. Test updated queries with live data" >> $GITHUB_STEP_SUMMARY
+            echo "1. **Hard refresh** your browser (Ctrl+Shift+R / Cmd+Shift+R) to clear cache" >> $GITHUB_STEP_SUMMARY
+            echo "2. Open the KQL Queryset in Fabric" >> $GITHUB_STEP_SUMMARY
+            echo "3. Verify all query tabs load without errors" >> $GITHUB_STEP_SUMMARY
+            echo "4. Test updated queries with live data" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> **⚠️ Important:** If you had the queryset open during deployment, you MUST hard refresh to see changes. Fabric's UI caches definitions aggressively." >> $GITHUB_STEP_SUMMARY
           else
             echo "## ❌ Update Failed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

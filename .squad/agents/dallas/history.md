@@ -337,3 +337,41 @@ Dallas diagnosed the user's "Something went wrong" queryset error as a **runtime
 - Parker: Working on queryset-only update workflow + KQL semantic fixes
 - Lambert: Working on queryset schema validation (nested dataSource oneOf)
 - Ash: Should validate KQL semantics in future deployments
+
+### 2026-03-27: Queryset Browser Error — Fabric UI Cache Diagnosis
+
+**Symptom:** User reports "Something went wrong" with SessionId error when opening queryset AFTER successful GitHub Actions deployment (run #23438225213).
+
+**Investigation:**
+- ✓ Deployment confirmed successful (HTTP 200, definition updated, 29 tabs)
+- ✓ Local validation: Correct structure (queryset wrapper, nested dataSource)
+- ✓ KQL fixes confirmed in repo (VibrationAnomalies, IncidentEnvironmentalCorrelation)
+
+**Root Cause: Browser-Side Cache**
+
+The Fabric REST API successfully updated the queryset backend, but the browser UI was serving a **stale cached version**. Fabric's web UI aggressively caches queryset definitions for performance. When an API update succeeds (HTTP 200), the browser doesn't automatically invalidate its cache.
+
+**Key Finding — Two-Phase Update Model:**
+
+1. **Backend Update (API):** `update_queryset.py` → HTTP 200 → definition stored in backend
+2. **Frontend Propagation (UI):** User refresh → GET definition → cache miss → fetch new → render
+
+**Gap:** If the UI was already open and cached the old definition, the user must manually trigger phase 2 via hard refresh.
+
+**Solution:**
+- User must perform **hard refresh** (Ctrl+Shift+R / Cmd+Shift+R) to invalidate browser cache
+- Updated workflow success message to include cache warning
+
+**Pattern for Team:**
+```
+API Success (HTTP 200) ≠ UI Reflects Changes
+Always hard refresh browser after queryset updates
+```
+
+**Files Changed:**
+- `.github/workflows/update-queryset.yml` — Added browser cache warning to success message
+- `.squad/decisions/inbox/dallas-queryset-browser-error-diagnosis.md` — Complete diagnosis
+
+**Impact:** All future queryset updates will include explicit cache guidance for users.
+
+**Decision File:** `.squad/decisions/inbox/dallas-queryset-browser-error-diagnosis.md`
