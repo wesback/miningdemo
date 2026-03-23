@@ -1,0 +1,125 @@
+name: Update KQL Queryset
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for queryset update (e.g., fixed query syntax)'
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'kql/**'
+
+# Prevent concurrent queryset updates
+concurrency:
+  group: queryset-update-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-queryset:
+    name: Update KQL Queryset
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install azure-identity~=1.15.0 requests~=2.31.0
+      
+      - name: Validate required secrets
+        run: |
+          echo "Validating queryset update configuration..."
+          
+          missing_secrets=()
+          [[ -z "${{ secrets.FABRIC_WORKSPACE_ID }}" ]] && missing_secrets+=("FABRIC_WORKSPACE_ID")
+          [[ -z "${{ secrets.AZURE_TENANT_ID }}" ]] && missing_secrets+=("AZURE_TENANT_ID")
+          [[ -z "${{ secrets.AZURE_CLIENT_ID }}" ]] && missing_secrets+=("AZURE_CLIENT_ID")
+          [[ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ]] && missing_secrets+=("AZURE_CLIENT_SECRET")
+          
+          if [ ${#missing_secrets[@]} -gt 0 ]; then
+            echo "❌ ERROR: Missing required secrets:"
+            printf '  - %s\n' "${missing_secrets[@]}"
+            echo ""
+            echo "Configure these in: Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets present"
+      
+      - name: Update KQL Queryset
+        id: update
+        run: |
+          echo "Updating KQL Queryset with latest queries from kql/..."
+          echo ""
+          
+          python update_queryset.py \
+            --workspace-id "${{ secrets.FABRIC_WORKSPACE_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --client-secret "${{ secrets.AZURE_CLIENT_SECRET }}"
+          
+          update_exit=$?
+          
+          if [ $update_exit -eq 0 ]; then
+            echo "✅ Queryset update completed successfully"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Queryset update failed with exit code $update_exit"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit $update_exit
+          fi
+      
+      - name: Generate update summary
+        if: always()
+        run: |
+          echo "# 📝 KQL Queryset Update" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.update.outputs.status }}" = "success" ]; then
+            echo "## ✅ Update Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Committed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            
+            if [ -n "${{ github.event.inputs.reason }}" ]; then
+              echo "**Reason:** ${{ github.event.inputs.reason }}" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### What Changed" >> $GITHUB_STEP_SUMMARY
+            echo "- Updated KQL Queryset: **MiningOps-Queries**" >> $GITHUB_STEP_SUMMARY
+            echo "- Source: \`kql/\` directory" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+            echo "1. Open the KQL Queryset in Fabric" >> $GITHUB_STEP_SUMMARY
+            echo "2. Verify all query tabs load without errors" >> $GITHUB_STEP_SUMMARY
+            echo "3. Test updated queries with live data" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Update Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Failed commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Common Causes" >> $GITHUB_STEP_SUMMARY
+            echo "- Queryset does not exist (run full deploy first)" >> $GITHUB_STEP_SUMMARY
+            echo "- Database not found in workspace" >> $GITHUB_STEP_SUMMARY
+            echo "- Authentication failed or insufficient permissions" >> $GITHUB_STEP_SUMMARY
+            echo "- Invalid KQL syntax in query files" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for detailed error messages." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Triggered by: ${{ github.event_name }}_" >> $GITHUB_STEP_SUMMARY
