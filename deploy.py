@@ -711,26 +711,32 @@ def build_queryset_definition(cluster_uri: str, database: str, queryset_name: st
 
     log.info("  KQL Queryset: %d individual query tabs", len(tabs))
 
-    # Root fields are version/dataSources/tabs — no outer wrapper key.
-    # Per official docs: "Queryset root fields version/dataSources/tabs"
+    # Official schema: RealTimeQueryset.json root MUST be {"queryset": {...}}.
+    # Confirmed from official MS docs example payload (base64 decoded):
+    #   https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition
+    # Without the outer "queryset" key, the API accepts the payload (no error)
+    # but the UI finds no queryset object and renders an empty queryset.
     queryset_json = {
-        "version": "1.0.0",
-        "dataSources": [
-            {
-                "id": ds_id,
-                "clusterUri": cluster_uri,
-                "type": "AzureDataExplorer",
-                "databaseName": database,
-            }
-        ],
-        "tabs": tabs,
+        "queryset": {
+            "version": "1.0.0",
+            "dataSources": [
+                {
+                    "id": ds_id,
+                    "clusterUri": cluster_uri,
+                    "type": "AzureDataExplorer",
+                    "databaseName": database,
+                }
+            ],
+            "tabs": tabs,
+        }
     }
 
+    qs = queryset_json["queryset"]
     log.info(
         "  Queryset definition: version=%s, dataSources=%d, tabs=%d",
-        queryset_json["version"],
-        len(queryset_json["dataSources"]),
-        len(queryset_json["tabs"]),
+        qs["version"],
+        len(qs["dataSources"]),
+        len(qs["tabs"]),
     )
     encoded = base64.b64encode(json.dumps(queryset_json).encode()).decode()
     
@@ -838,15 +844,19 @@ def build_dashboard_definition(cluster_uri: str, database: str, database_id: str
 
     # ------------------------------------------------------------------
     # Queries — every entry MUST include "usedVariables" (even if empty).
+    # Each query needs a "dataSource" oneOf object (v69 schema):
+    #   - kind "inline"    → dataSourceId references a dashboard-level dataSource
+    #   - kind "parameter" → parameterId references a dashboard parameter
     # ------------------------------------------------------------------
     def q(key: str, text: str) -> dict[str, Any]:
-        # dataSourceId is a flat field per the Fabric RTD schema v69 spec.
-        # A nested "dataSource" object with kind="inline" is not valid.
         return {
             "id":            q_id[key],
-            "dataSourceId":  ds_id,
             "text":          text,
             "usedVariables": [],
+            "dataSource": {
+                "kind":         "inline",
+                "dataSourceId": ds_id,
+            },
         }
 
     queries = [
@@ -1087,37 +1097,36 @@ ProductionMetrics
             "queryRef":   {"kind": "query", "queryId": q_id[key]},
             "visualType": visual,
             "layout":     {"x": x, "y": y, "width": w, "height": h},
-            "usedParamVariables": [],
             "visualOptions": {},
         }
 
     tiles = [
         # ── Page 1: Operations Overview ───────────────────────────────
-        tile("active-equipment",   "Active Equipment Count",      "ops",        "multistat", 0,  0, 10, 7),
-        tile("shift-tonnage",      "Shift Tonnage vs Target",     "ops",        "bar",    10,  0, 10, 7),
-        tile("equipment-map",      "Equipment Status Map",        "ops",        "map",     0,  7, 10, 8),
-        tile("active-alerts",      "Active Alerts",               "ops",        "table",  10,  7, 10, 8),
+        tile("active-equipment",   "Active Equipment Count",      "ops",        "multistat", 0,  0, 12, 7),
+        tile("shift-tonnage",      "Shift Tonnage vs Target",     "ops",        "bar",    12,  0, 12, 7),
+        tile("equipment-map",      "Equipment Status Map",        "ops",        "map",     0,  7, 12, 8),
+        tile("active-alerts",      "Active Alerts",               "ops",        "table",  12,  7, 12, 8),
         # ── Page 2: Safety & Environment ──────────────────────────────
         tile("gas-levels",         "Gas Levels by Zone",          "safety",     "line",    0,  0, 12, 8),
-        tile("temp-heatmap",       "Temperature Heat Map",        "safety",     "table",   12, 0,  8, 8),
-        tile("threshold-breaches", "Threshold Breaches 24h",      "safety",     "table",   0,  8, 10, 8),
-        tile("safety-incidents",   "Safety Incident Timeline",    "safety",     "table",  10,  8, 10, 8),
+        tile("temp-heatmap",       "Temperature Heat Map",        "safety",     "table",   12, 0, 12, 8),
+        tile("threshold-breaches", "Threshold Breaches 24h",      "safety",     "table",   0,  8, 12, 8),
+        tile("safety-incidents",   "Safety Incident Timeline",    "safety",     "table",  12,  8, 12, 8),
         # ── Page 3: Equipment Health ───────────────────────────────────
-        tile("vibration-anomaly",      "Vibration Anomaly Trend",  "equipment",  "scatter", 0,  0, 10, 8),
-        tile("drill-hydraulic",        "Drill Hydraulic Pressure", "equipment",  "line",   10,  0, 10, 8),
-        tile("equipment-health-scores","Equipment Health Scores",  "equipment",  "table",   0,  8, 10, 8),
-        tile("equipment-utilisation",  "Equipment Utilisation",    "equipment",  "bar",    10,  8, 10, 8),
+        tile("vibration-anomaly",      "Vibration Anomaly Trend",  "equipment",  "scatter", 0,  0, 12, 8),
+        tile("drill-hydraulic",        "Drill Hydraulic Pressure", "equipment",  "line",   12,  0, 12, 8),
+        tile("equipment-health-scores","Equipment Health Scores",  "equipment",  "table",   0,  8, 12, 8),
+        tile("equipment-utilisation",  "Equipment Utilisation",    "equipment",  "bar",    12,  8, 12, 8),
         # ── Page 4: Production ─────────────────────────────────────────
         tile("conveyor-throughput", "Conveyor Throughput Trend",  "production", "area",    0,  0, 12, 8),
-        tile("truck-cycle-times",   "Haul Truck Cycle Times",     "production", "bar",    12,  0,  8, 8),
-        tile("route-efficiency",    "Route Efficiency",           "production", "table",   0,  8, 10, 8),
-        tile("production-7d",       "7-Day Production Trend",     "production", "line",   10,  8, 10, 8),
+        tile("truck-cycle-times",   "Haul Truck Cycle Times",     "production", "bar",    12,  0, 12, 8),
+        tile("route-efficiency",    "Route Efficiency",           "production", "table",   0,  8, 12, 8),
+        tile("production-7d",       "7-Day Production Trend",     "production", "line",   12,  8, 12, 8),
     ]
 
     dashboard_json = {
         "schema_version": 69,           # integer, not string — Fabric RTD schema requires int
         "title":        "Mining Operations",
-        "autoRefresh":  {"enabled": True, "interval": 30},
+        "autoRefresh":  {"enabled": True},  # interval field not supported by current schema
         "dataSources":  [data_source],
         "pages":        pages,
         "tiles":        tiles,        # root-level; NOT inside pages
