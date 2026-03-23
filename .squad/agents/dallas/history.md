@@ -67,3 +67,32 @@ All patterns follow Microsoft best practices. Documentation supports both expert
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+### 2026-03-24: Three Schema Bugs Fixed — Queryset + Dashboard Deployment
+
+**Files changed:** `deploy.py`
+
+**Bug 1 (Critical — Queryset): Extra `"queryset"` wrapper in `build_queryset_definition()`**
+- The `RealTimeQueryset.json` payload was wrapped in `{"queryset": {...}}` instead of being flat.
+- Official docs state root fields are `version`, `dataSources`, `tabs` — no outer wrapper.
+- Fix: Remove the wrapper; `queryset_json` is now the flat object directly.
+
+**Bug 2 (Dashboard): `schema_version` was a string, must be integer**
+- `"schema_version": "52"` → `"schema_version": 52`
+- Fabric RTD schema v52 validates this as an integer type.
+
+**Bug 3 (Dashboard): Query `dataSource` was a nested object; must be flat `dataSourceId`**
+- The `q()` helper used `"dataSource": {"kind": "inline", "dataSourceId": ds_id}`.
+- The Fabric RTD schema v52 expects `"dataSourceId": ds_id` directly on the query object.
+- `kind: "inline"` is not a valid discriminator in the queries array structure.
+
+**Logging added:**
+- `build_queryset_definition()` now logs: version, dataSources count, tabs count.
+- `build_dashboard_definition()` now logs: schema_version, pages, tiles, queries, dataSources counts.
+
+**Reusable pattern:**
+> Always decode and inspect generated base64 payloads locally (python3 dry-run) before
+> treating a deployment failure as a network or auth issue. The bugs in this session were
+> all silent schema mismatches — the API returned a 4xx with an opaque message rather
+> than a helpful diff. Dry-running `build_*_definition()` with `python3 -c "..."` catches
+> these immediately.

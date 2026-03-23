@@ -132,6 +132,13 @@ def get_kusto_token(args: argparse.Namespace, cluster_uri: str) -> str:
 # ---------------------------------------------------------------------------
 class FabricClient:
     """Wrapper around the Fabric REST API."""
+    
+    # Map endpoint names (plural/lowercase) to item type names (singular/PascalCase)
+    ENDPOINT_TO_TYPE = {
+        "eventhouses": "Eventhouse",
+        "kqlDatabases": "KQLDatabase",
+        "items": None,  # Generic endpoint
+    }
 
     def __init__(self, token: str, workspace_id: str) -> None:
         self.workspace_id = workspace_id
@@ -143,6 +150,10 @@ class FabricClient:
 
     def _url(self, path: str) -> str:
         return f"{FABRIC_API_BASE}/workspaces/{self.workspace_id}/{path}"
+    
+    def _normalize_type(self, item_type: str) -> str:
+        """Convert endpoint name to item type name for API lookups."""
+        return self.ENDPOINT_TO_TYPE.get(item_type, item_type)
 
     def _wait_for_operation(self, response: requests.Response, item_type: str) -> dict[str, Any] | None:
         """Handle long-running operations (202 Accepted).
@@ -231,12 +242,25 @@ class FabricClient:
         return None
 
     def create_item(self, item_type: str, display_name: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        """Create a Fabric item (Eventhouse, KQL Database, Eventstream, etc.)."""
+        """Create a Fabric item (Eventhouse, KQL Database, Eventstream, etc.).
+        
+        For items with definitions (queryset, dashboard, eventstream, etc.), use the
+        generic /items endpoint and include the type field in the request body.
+        For items with creation payloads (kqlDatabases), use the specific endpoint.
+        """
         body: dict[str, Any] = {"displayName": display_name}
+        
+        # Items with definitions should use the generic /items endpoint and include type
+        if payload and "definition" in payload:
+            body["type"] = item_type
+            url = self._url("items")
+        else:
+            # Items with creation payloads use specific endpoints
+            url = self._url(item_type)
+        
         if payload:
             body.update(payload)
 
-        url = self._url(item_type)
         log.info("Creating %s: '%s'…", item_type, display_name)
         resp = self.session.post(url, json=body)
 
@@ -263,18 +287,23 @@ class FabricClient:
             return None
 
     def get_item_by_name(self, item_type: str, display_name: str) -> dict[str, Any] | None:
-        """Find an existing item by display name, following pagination."""
-        url: str | None = self._url(item_type)
+        """Find an existing item by display name, following pagination.
+        
+        Uses the generic /items endpoint and filters by type and displayName.
+        """
+        normalized_type = self._normalize_type(item_type)
+        url: str | None = self._url("items")
         page = 0
         while url:
             page += 1
             resp = self.session.get(url)
             if resp.status_code != 200:
-                log.warning("  Could not list %s (HTTP %d)", item_type, resp.status_code)
+                log.warning("  Could not list items (HTTP %d)", resp.status_code)
                 break
             data = resp.json()
             for item in data.get("value", []):
-                if item.get("displayName") == display_name:
+                # Match both displayName and type (for items created via /items endpoint)
+                if item.get("displayName") == display_name and item.get("type") == normalized_type:
                     log.info("  Found existing %s: id=%s", item_type, item.get("id", "?"))
                     return item
             # Follow continuationUri for next page; fall back to None to stop.
@@ -282,8 +311,11 @@ class FabricClient:
         return None
 
     def get_item_definition(self, item_type: str, item_id: str) -> dict[str, Any] | None:
-        """Get the definition of an item (for Eventstream connection details)."""
-        url = self._url(f"{item_type}/{item_id}/getDefinition")
+        """Get the definition of an item (for Eventstream connection details).
+        
+        Uses the generic /items endpoint for all item types.
+        """
+        url = self._url(f"items/{item_id}/getDefinition")
         resp = self.session.post(url)
         if resp.status_code == 200:
             return resp.json()
@@ -292,8 +324,11 @@ class FabricClient:
         return None
 
     def update_item_definition(self, item_type: str, item_id: str, payload: dict[str, Any]) -> bool:
-        """Update the definition of an existing item (dashboard, queryset, etc.)."""
-        url = self._url(f"{item_type}/{item_id}/updateDefinition")
+        """Update the definition of an existing item (dashboard, queryset, etc.).
+        
+        Uses the generic /items endpoint for all item types.
+        """
+        url = self._url(f"items/{item_id}/updateDefinition")
         log.info("  Updating %s definition (id=%s)…", item_type, item_id)
         resp = self.session.post(url, json=payload)
         if resp.status_code == 200:
@@ -676,21 +711,27 @@ def build_queryset_definition(cluster_uri: str, database: str, queryset_name: st
 
     log.info("  KQL Queryset: %d individual query tabs", len(tabs))
 
+    # Root fields are version/dataSources/tabs — no outer wrapper key.
+    # Per official docs: "Queryset root fields version/dataSources/tabs"
     queryset_json = {
-        "queryset": {
-            "version": "1.0.0",
-            "dataSources": [
-                {
-                    "id": ds_id,
-                    "clusterUri": cluster_uri,
-                    "type": "AzureDataExplorer",
-                    "databaseName": database,
-                }
-            ],
-            "tabs": tabs,
-        }
+        "version": "1.0.0",
+        "dataSources": [
+            {
+                "id": ds_id,
+                "clusterUri": cluster_uri,
+                "type": "AzureDataExplorer",
+                "databaseName": database,
+            }
+        ],
+        "tabs": tabs,
     }
 
+    log.info(
+        "  Queryset definition: version=%s, dataSources=%d, tabs=%d",
+        queryset_json["version"],
+        len(queryset_json["dataSources"]),
+        len(queryset_json["tabs"]),
+    )
     encoded = base64.b64encode(json.dumps(queryset_json).encode()).decode()
     
     # .platform file — required for Fabric item definitions
@@ -741,7 +782,7 @@ def build_dashboard_definition(cluster_uri: str, database: str, database_id: str
     All IDs are deterministic RFC 4122 UUIDs (uuid5) so re-deploys never
     create duplicates.  Tiles live at the ROOT level with a ``pageId``
     back-reference — NOT nested inside pages.  dataSources.kind is
-    ``kusto-trident`` as required by the Fabric RTD schema.
+    ``KQLDatabase`` as required by the Fabric Git integration schema (v52).
     """
     # ------------------------------------------------------------------
     # Deterministic UUIDs — same inputs always produce the same UUIDs so
@@ -799,9 +840,11 @@ def build_dashboard_definition(cluster_uri: str, database: str, database_id: str
     # Queries — every entry MUST include "usedVariables" (even if empty).
     # ------------------------------------------------------------------
     def q(key: str, text: str) -> dict[str, Any]:
+        # dataSourceId is a flat field per the Fabric RTD schema v52 spec.
+        # A nested "dataSource" object with kind="inline" is not valid.
         return {
             "id":            q_id[key],
-            "dataSource":    {"kind": "inline", "dataSourceId": ds_id},
+            "dataSourceId":  ds_id,
             "text":          text,
             "usedVariables": [],
         }
@@ -1072,7 +1115,7 @@ ProductionMetrics
     ]
 
     dashboard_json = {
-        "schema_version": "52",
+        "schema_version": 52,           # integer, not string — Fabric RTD schema requires int
         "title":        "Mining Operations",
         "autoRefresh":  {"enabled": True, "interval": 30},
         "dataSources":  [data_source],
@@ -1082,6 +1125,15 @@ ProductionMetrics
         "baseQueries":  [],           # required by schema; empty is valid
         "parameters":   [],           # required by schema; empty is valid
     }
+
+    log.info(
+        "  Dashboard definition: schema_version=%d, pages=%d, tiles=%d, queries=%d, dataSources=%d",
+        dashboard_json["schema_version"],
+        len(dashboard_json["pages"]),
+        len(dashboard_json["tiles"]),
+        len(dashboard_json["queries"]),
+        len(dashboard_json["dataSources"]),
+    )
 
     encoded = base64.b64encode(json.dumps(dashboard_json).encode()).decode()
     
@@ -1200,14 +1252,14 @@ def deploy(args: argparse.Namespace) -> None:
     # -----------------------------------------------------------------------
     if query_uri:
         queryset_payload = build_queryset_definition(query_uri, DATABASE_NAME, QUERYSET_NAME)
-        client.create_item("kqlQuerysets", QUERYSET_NAME, queryset_payload)
+        client.create_item("KQLQueryset", QUERYSET_NAME, queryset_payload)
 
     # -----------------------------------------------------------------------
     # Step 6: Create Real-Time Dashboard
     # -----------------------------------------------------------------------
     if query_uri:
         dashboard_payload = build_dashboard_definition(query_uri, DATABASE_NAME, database_id, DASHBOARD_NAME)
-        client.create_item("kqlDashboards", DASHBOARD_NAME, dashboard_payload)
+        client.create_item("KQLDashboard", DASHBOARD_NAME, dashboard_payload)
 
     # -----------------------------------------------------------------------
     # Summary
