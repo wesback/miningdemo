@@ -106,16 +106,6 @@ let data_check = EquipmentTelemetry
                 AssetCount = dcount(EquipmentId);
 let has_sufficient_data = toscalar(data_check
     | project IsSufficient = (DataPoints >= 100 and TimeSpan >= 1));
-// Return warning if insufficient data; otherwise proceed with RUL estimation
-data_check
-| extend Message = iff(has_sufficient_data,
-    "✓ Sufficient data — proceeding with RUL estimation",
-    strcat("⚠ INSUFFICIENT DATA — Only ", DataPoints, " points over ", TimeSpan,
-           " days. Run simulator for longer or reduce lookback window."))
-| project Message, DataPoints, TimeSpan, AssetCount
-| union (
-    // Only compute RUL if data is sufficient
-    iff(has_sufficient_data,
 // Temperature degradation: rising trend = degradation
 let TempTrend = EquipmentTelemetry
     | where SensorType == "engine_temp_c" and EquipmentType == "haul_truck"
@@ -138,35 +128,58 @@ let VibTrend = EquipmentTelemetry
         by EquipmentId
     | extend (VibSlope, VibIntercept, VibR2, VibVariance) = series_fit_line(VibSeries)
     | project EquipmentId, VibSlope, VibR2;
-// Combine into RUL estimate
-TempTrend
+let rul_results = TempTrend
 | join kind=leftouter OilHealth on EquipmentId
 | join kind=leftouter VibTrend on EquipmentId
-// Normalise each factor to 0-1 degradation score
 | extend TempDegradation  = min_of(1.0, max_of(0.0, TempSlope * 100.0))
 | extend OilDegradation   = min_of(1.0, max_of(0.0, (OilCV - 0.05) * 10.0))
 | extend VibDegradation   = min_of(1.0, max_of(0.0, VibSlope * 50.0))
 | extend DegradationIndex = round(
     (TempDegradation * 0.35) + (OilDegradation * 0.35) + (VibDegradation * 0.30), 3)
-// Estimate remaining days (simplified linear model)
 | extend EstimatedRUL_Days = case(
     DegradationIndex > 0.8, round(3.0 / DegradationIndex, 0),
     DegradationIndex > 0.5, round(14.0 / DegradationIndex, 0),
     DegradationIndex > 0.2, round(30.0 / DegradationIndex, 0),
     real(180))
-| project EquipmentId, DegradationIndex,
-          TempDegradation  = round(TempDegradation, 3),
-          OilDegradation   = round(OilDegradation, 3),
-          VibDegradation   = round(VibDegradation, 3),
-          EstimatedRUL_Days,
-          MaintenancePriority = case(
-              EstimatedRUL_Days <= 7,  "URGENT",
-              EstimatedRUL_Days <= 21, "PLAN",
-              "ROUTINE")
-| order by EstimatedRUL_Days asc
-    , datatable(Message: string, DataPoints: long, TimeSpan: real, AssetCount: long)[])
+| project
+    Message = "✓ Sufficient data — proceeding with RUL estimation",
+    DataPoints = long(null),
+    TimeSpan = real(null),
+    AssetCount = long(null),
+    EquipmentId,
+    DegradationIndex,
+    TempDegradation = round(TempDegradation, 3),
+    OilDegradation = round(OilDegradation, 3),
+    VibDegradation = round(VibDegradation, 3),
+    EstimatedRUL_Days,
+    MaintenancePriority = case(
+        EstimatedRUL_Days <= 7,  "URGENT",
+        EstimatedRUL_Days <= 21, "PLAN",
+        "ROUTINE");
+union
+(
+    data_check
+    | where not(has_sufficient_data)
+    | extend Message = strcat("⚠ INSUFFICIENT DATA — Only ", DataPoints, " points over ", TimeSpan,
+           " days. Run simulator for longer or reduce lookback window.")
+    | project
+        Message,
+        DataPoints,
+        TimeSpan,
+        AssetCount,
+        EquipmentId = "",
+        DegradationIndex = real(null),
+        TempDegradation = real(null),
+        OilDegradation = real(null),
+        VibDegradation = real(null),
+        EstimatedRUL_Days = real(null),
+        MaintenancePriority = ""
+),
+(
+    rul_results
+    | where has_sufficient_data
 )
-
+| order by coalesce(EstimatedRUL_Days, real(9999)) asc, EquipmentId asc
 
 // ╔═══════════════════════════════════════════════════════════════════════════╗
 // ║  5. PRODUCTION FORECAST (series_decompose_forecast)                     ║
@@ -244,16 +257,7 @@ let belt_data_check = EquipmentTelemetry
                 ConveyorCount = dcount(EquipmentId);
 let belt_has_data = toscalar(belt_data_check
     | project IsSufficient = (DataPoints >= 100 and TimeSpan >= 1));
-belt_data_check
-| extend Message = iff(belt_has_data,
-    "✓ Sufficient data — proceeding with belt wear analysis",
-    strcat("⚠ INSUFFICIENT DATA — Only ", DataPoints, " points over ", TimeSpan,
-           " days. Adjust lookback window or run simulator longer."))
-| project Message, DataPoints, TimeSpan, ConveyorCount
-| union (
-    // Only compute belt wear if data is sufficient
-    iff(belt_has_data,
-EquipmentTelemetry
+let belt_results = EquipmentTelemetry
 | where SensorType == "vibration_mm_s"
     and EquipmentType == "conveyor"
     and Timestamp > ago(belt_lookback)
@@ -262,71 +266,42 @@ EquipmentTelemetry
     on Timestamp from ago(belt_lookback) to now() step 1m
     by EquipmentId
 | extend (Periods, PeriodScores) = series_periods_detect(VibSeries, 2.0, 1440.0, 2)
-// Decompose into trend + seasonal + residual
 | extend (Flags, Scores, Baseline) = series_decompose_anomalies(VibSeries)
-// Fit trend line to detect long-term degradation
 | extend (Slope, Intercept, R2, Variance) = series_fit_line(VibSeries)
-| project EquipmentId,
-          DetectedPeriods = Periods,
-          PeriodConfidence = PeriodScores,
-          TrendSlope = round(Slope * 60.0, 4),  // per-hour rate
-          TrendR2 = round(R2, 3),
-          WearIndicator = case(
-              Slope > 0.001,  "DEGRADING — vibration trending upward",
-              Slope < -0.001, "IMPROVING — post-maintenance settling",
-              "STABLE")
-    , datatable(Message: string, DataPoints: long, TimeSpan: real, ConveyorCount: long)[])
+| project
+    Message = "✓ Sufficient data — proceeding with belt wear analysis",
+    DataPoints = long(null),
+    TimeSpan = real(null),
+    ConveyorCount = long(null),
+    EquipmentId,
+    DetectedPeriods = Periods,
+    PeriodConfidence = PeriodScores,
+    TrendSlope = round(Slope * 60.0, 4),
+    TrendR2 = round(R2, 3),
+    WearIndicator = case(
+        Slope > 0.001,  "DEGRADING — vibration trending upward",
+        Slope < -0.001, "IMPROVING — post-maintenance settling",
+        "STABLE");
+union
+(
+    belt_data_check
+    | where not(belt_has_data)
+    | extend Message = strcat("⚠ INSUFFICIENT DATA — Only ", DataPoints, " points over ", TimeSpan,
+           " days. Adjust lookback window or run simulator longer.")
+    | project
+        Message,
+        DataPoints,
+        TimeSpan,
+        ConveyorCount,
+        EquipmentId = "",
+        DetectedPeriods = dynamic(null),
+        PeriodConfidence = dynamic(null),
+        TrendSlope = real(null),
+        TrendR2 = real(null),
+        WearIndicator = ""
+),
+(
+    belt_results
+    | where belt_has_data
 )
-
-
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║  8. FAILURE PROBABILITY HEATMAP (Multi-Asset Risk Matrix)               ║
-// ║  Scores all equipment on a 0–100 failure probability over 48 hours      ║
-// ║  using recent anomaly density + trend severity.                         ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
-let lookback = 24h;
-// Count anomalies per asset in last 24h
-let AnomalyCounts = EquipmentTelemetry
-    | where Timestamp > ago(lookback) and Quality == "good"
-    | make-series ValueSeries = avg(Value) default = real(null)
-        on Timestamp from ago(lookback) to now() step 5m
-        by EquipmentId, SensorType
-    | extend (Flags, Scores, Baseline) = series_decompose_anomalies(ValueSeries)
-    | mv-expand Flags to typeof(int)
-    | where Flags != 0
-    | summarize AnomalyCount = count() by EquipmentId, SensorType
-    | summarize TotalAnomalies = sum(AnomalyCount),
-                SensorTypesAffected = dcount(SensorType)
-      by EquipmentId;
-// Get trend severity per asset
-let TrendSeverity = EquipmentTelemetry
-    | where Timestamp > ago(lookback) and Quality == "good"
-    | where SensorType in ("engine_temp_c", "vibration_mm_s", "hydraulic_psi", "oil_pressure_kpa")
-    | make-series ValueSeries = avg(Value) default = real(null)
-        on Timestamp from ago(lookback) to now() step 10m
-        by EquipmentId, SensorType
-    | extend (Slope, Intercept, R2, Variance) = series_fit_line(ValueSeries)
-    // Negative slope is bad for pressure, positive is bad for temp/vibration
-    | extend BadTrend = case(
-        SensorType in ("engine_temp_c", "vibration_mm_s") and Slope > 0, abs(Slope),
-        SensorType in ("hydraulic_psi", "oil_pressure_kpa") and Slope < 0, abs(Slope),
-        0.0)
-    | summarize MaxBadTrend = max(BadTrend), AvgBadTrend = avg(BadTrend) by EquipmentId;
-// Combine into failure probability
-AnomalyCounts
-| join kind=leftouter TrendSeverity on EquipmentId
-| join kind=leftouter (EquipmentRegistry | project EquipmentId, EquipmentType, Zone) on EquipmentId
-| extend FailureProbability_48h = round(min_of(100.0,
-    (TotalAnomalies * 3.0) +
-    (SensorTypesAffected * 10.0) +
-    (coalesce(MaxBadTrend, 0.0) * 500.0) +
-    (coalesce(AvgBadTrend, 0.0) * 200.0)
-), 0)
-| project EquipmentId, EquipmentType, Zone,
-          FailureProbability_48h,
-          TotalAnomalies, SensorTypesAffected,
-          RiskTier = case(
-              FailureProbability_48h >= 70, "HIGH",
-              FailureProbability_48h >= 40, "MEDIUM",
-              "LOW")
-| order by FailureProbability_48h desc
+| order by coalesce(TrendSlope, real(9999)) desc, EquipmentId asc

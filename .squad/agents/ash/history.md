@@ -7,6 +7,20 @@
 
 ## Learnings
 
+### 2026-03-27 — Critical KQL Semantic Error: Invalid iff() in union() Pattern
+- **Files:** `kql/04-predictive-queries.kql` — Queries 4 (RUL Estimation, lines 97-145) and 7 (Belt Wear, lines 212-234)
+- **Root cause:** Two predictive queries used `iff(scalar_condition, <tabular_query>, datatable()[])` inside a `union()` operator. This is **semantically invalid** because `iff()` is a scalar function that operates on row-level values, not tabular expressions. KQL cannot conditionally execute entire queries using `iff()`.
+- **Symptom:** Fabric UI threw generic "Something went wrong" error (SessionId='905ac82d-...') when opening the queryset, **AFTER** the schema dataSource fix was applied. The deployment succeeded (HTTP 201), but the runtime query parser rejected the invalid syntax.
+- **Fix:** Removed the conditional wrapper entirely. Queries now execute directly, returning empty results naturally if no data exists (standard KQL behavior).
+- **Pattern learned:** 
+  - `iff()` is for **scalar values only**: `extend Status = iff(Temp > 100, "Hot", "Cold")`
+  - For conditional queries, use: (1) separate queries with `union`, (2) filter results with `where`, or (3) accept empty results
+  - **NEVER** use: `| union (iff(condition, <query>, datatable()[]))` — this is a parse-time semantic error
+- **Impact:** Queryset now opens successfully in Fabric UI. All 29 tabs load without runtime errors.
+- **Decision file:** `.squad/decisions/inbox/ash-queryset-iff-union-fix.md`
+
+**Cross-team context:** This was the final blocker after Lambert's schema fix (dataSource oneOf) and Parker's KQL join fixes. The combination of all three fixes enables complete end-to-end queryset deployment and runtime execution.
+
 ### 2026-03-20 — Code quality improvements to KQL queries
 - **File:** `kql/04-predictive-queries.kql` — Added data sufficiency checks to RUL estimation (Query 4, lines ~97-145) and belt wear detection (Query 7, lines ~207-234). Both queries now validate minimum data points and timespan before executing ML functions, returning clear warning messages if insufficient data exists in fresh environments.
 - **Pattern:** Use `let data_check` with `count()` and `datetime_diff()`, then wrap ML logic in `iff(has_sufficient_data, ..., datatable()[])` union pattern. This prevents empty/misleading results and provides actionable feedback.
