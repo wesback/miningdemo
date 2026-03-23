@@ -7,5 +7,7 @@ simulator/.venv/
 .squad/log/
 .squad/decisions/inbox/
 .squad/sessions/
+# Generated simulator history data
+simulator/historical_data/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
