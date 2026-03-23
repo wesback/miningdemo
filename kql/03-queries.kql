@@ -12,17 +12,30 @@
 // Shows count of equipment by current status: Running / Idle / Fault
 // ---------------------------------------------------------------------------
 // Query: EquipmentStatusSummary
+// BUG FIX: original query used arg_max(Timestamp, Value, SensorType) by EquipmentId,
+// which selected only the single most-recent reading across ALL sensor types per asset.
+// The status case logic requires engine_temp_c, belt_speed_m_s, and hydraulic_psi to
+// be checked independently — a single latest sample may not be any of those types.
+// Fix: group by (EquipmentId, EquipmentType, SensorType) to get one latest row per
+// sensor, evaluate per-sensor status, then aggregate to the worst status per asset.
 let cutoff = ago(2m);
 EquipmentTelemetry
 | where Timestamp > cutoff and Quality == "good"
-| summarize LastValue = arg_max(Timestamp, Value, SensorType) by EquipmentId, EquipmentType
-| extend Status = case(
-    SensorType == "engine_temp_c" and Value > 105, "Fault",
-    SensorType == "engine_temp_c" and Value < 30,  "Idle",
-    SensorType == "belt_speed_m_s" and Value == 0,  "Idle",
-    SensorType == "hydraulic_psi" and Value < 500,  "Idle",
+// Get the latest reading for each sensor type on each piece of equipment
+| summarize (LastTs, LastValue) = arg_max(Timestamp, Value) by EquipmentId, EquipmentType, SensorType
+| extend SensorStatus = case(
+    SensorType == "engine_temp_c" and LastValue > 105, "Fault",
+    SensorType == "engine_temp_c" and LastValue < 30,  "Idle",
+    SensorType == "belt_speed_m_s" and LastValue == 0,  "Idle",
+    SensorType == "hydraulic_psi" and LastValue < 500,  "Idle",
     "Running"
 )
+// Roll up to one status per asset: Fault beats Idle beats Running
+| summarize Status = case(
+    countif(SensorStatus == "Fault") > 0, "Fault",
+    countif(SensorStatus == "Idle") > 0,  "Idle",
+    "Running"
+) by EquipmentId, EquipmentType
 | summarize Count = count() by Status
 | order by Status asc;
 
@@ -71,6 +84,10 @@ EquipmentTelemetry
 // equipment requiring immediate inspection (bearings, misalignment, imbalance).
 // Sensitive to true anomalies while filtering normal operational variance.
 // ---------------------------------------------------------------------------
+// BUG FIX: "Latest = arg_max(Timestamp, Value)" — when arg_max is named, KQL renames
+// the secondary column to "Latest_Value" (not "Value"). The subsequent
+// "| where Value > UpperBound" therefore references a non-existent column and
+// silently returns 0 rows. Fix: use tuple form so both outputs are explicitly named.
 let window = 15m;
 let sigma_threshold = 3.0;
 EquipmentTelemetry
@@ -78,20 +95,20 @@ EquipmentTelemetry
     and Timestamp > ago(1h)
     and Quality == "good"
 | summarize
-    Avg15m   = avg(Value),
-    Std15m   = stdev(Value),
-    Latest   = arg_max(Timestamp, Value)
+    Avg15m  = avg(Value),
+    Std15m  = stdev(Value),
+    (LastTs, LatestValue) = arg_max(Timestamp, Value)
   by EquipmentId, bin(Timestamp, window)
 | extend UpperBound = Avg15m + (sigma_threshold * Std15m)
-| where Value > UpperBound
+| where LatestValue > UpperBound
 | project
     EquipmentId,
     WindowEnd     = Timestamp + window,
-    LatestValue   = Value,
+    LatestValue   = round(LatestValue, 2),
     Avg15m        = round(Avg15m, 2),
     Std15m        = round(Std15m, 2),
     UpperBound    = round(UpperBound, 2),
-    Deviation     = round((Value - Avg15m) / Std15m, 1)
+    Deviation     = round((LatestValue - Avg15m) / Std15m, 1)
 | order by Deviation desc;
 
 // ---------------------------------------------------------------------------
@@ -287,19 +304,36 @@ EnvironmentalReadings
 // Tonnes mined/hauled/processed in current shift vs target.
 // ---------------------------------------------------------------------------
 // Query: ShiftTonnageProgress
+// BUG FIX: original query used sum(Value) on load_tonnes, a continuous sensor reading.
+// A truck carrying 80 t and reporting every second accumulates 80 × 3600 = 288,000 t/hr
+// in the sum — wildly inflated. The correct unit of work is a completed load delivery.
+// Fix: count Dumping events (cycle_state == 3 = one load delivered per dump) and
+// multiply by the average payload weight measured during the shift.
 let shift_start = bin(now(), 8h);  // approximate shift boundary
 let shift_target_tonnes = 5000.0;
-ProductionMetrics
-| where SensorType == "load_tonnes"
-    and Timestamp > shift_start
-    and Quality == "good"
-| summarize TotalTonnes = round(sum(Value), 0) by EquipmentType
+let dump_events = ProductionMetrics
+    | where SensorType == "cycle_state"
+        and EquipmentType == "haul_truck"
+        and Timestamp > shift_start
+        and Quality == "good"
+        and Value == 3.0  // cycle_state 3 = Dumping → one completed load delivery
+    | summarize DumpCount = count() by EquipmentType;
+let avg_payload = ProductionMetrics
+    | where SensorType == "load_tonnes"
+        and Timestamp > shift_start
+        and Quality == "good"
+        and Value > 5  // exclude empty/trace readings
+    | summarize AvgPayload = avg(Value) by EquipmentType;
+dump_events
+| join kind=leftouter avg_payload on EquipmentType
+| extend TotalTonnes = round(DumpCount * coalesce(AvgPayload, 50.0), 0)
 | extend Target = shift_target_tonnes
 | extend PctOfTarget = round(TotalTonnes / Target * 100, 1)
 | extend RAG = case(
     PctOfTarget >= 95, "Green",
     PctOfTarget >= 80, "Amber",
-    "Red");
+    "Red")
+| project EquipmentType, TotalTonnes, Target, PctOfTarget, RAG;
 
 // ---------------------------------------------------------------------------
 // US-3.2  Conveyor Throughput Trend (Area chart — 7 days)
@@ -363,9 +397,26 @@ ProductionMetrics
 // US-3.1  7-Day Production Trend (Line chart)
 // ---------------------------------------------------------------------------
 // Query: ProductionTrend7d
+// BUG FIX: original used sum(Value) on load_tonnes — same continuous-sensor inflation
+// as ShiftTonnageProgress. Fix: count completed dump events per day and multiply by
+// average payload, giving tonnes-delivered rather than tonnes-sensor-accumulated.
+let avg_load = toscalar(
+    ProductionMetrics
+    | where SensorType == "load_tonnes"
+        and Timestamp > ago(7d)
+        and Quality == "good"
+        and Value > 5
+    | summarize avg(Value)
+);
 ProductionMetrics
-| where SensorType == "load_tonnes" and Timestamp > ago(7d) and Quality == "good"
-| summarize DailyTonnes = round(sum(Value), 0) by Day = startofday(Timestamp)
+| where SensorType == "cycle_state"
+    and EquipmentType == "haul_truck"
+    and Timestamp > ago(7d)
+    and Quality == "good"
+    and Value == 3.0  // Dumping = one completed load delivery
+| summarize DumpCount = count() by Day = startofday(Timestamp)
+| extend DailyTonnes = round(DumpCount * coalesce(avg_load, 50.0), 0)
+| project Day, DailyTonnes
 | order by Day asc;
 
 
@@ -378,14 +429,20 @@ ProductionMetrics
 // Operating hours / available hours per asset, previous day.
 // ---------------------------------------------------------------------------
 // Query: EquipmentUtilisation
-let report_day = startofday(ago(1d));
-let available_hours = 24.0;
+// BUG FIX: original used startofday(ago(1d)) = calendar yesterday. In a fresh demo
+// environment the CSV historical data ends well before yesterday and live streaming
+// starts from the deployment moment — leaving yesterday's window completely empty.
+// Fix: use a rolling 24-hour window (ago(24h) → now()) which spans whatever data
+// exists regardless of the CSV/stream boundary. The window_hours denominator is kept
+// at 24.0 so utilisation percentages remain comparable to a full-day report.
+let window_start = ago(24h);
+let window_hours = 24.0;
 EquipmentTelemetry
-| where Timestamp between (report_day .. (report_day + 1d))
+| where Timestamp between (window_start .. now())
     and Quality == "good"
 | summarize ActiveMinutes = dcount(bin(Timestamp, 1m)) by EquipmentId, EquipmentType
 | extend OperatingHours = round(ActiveMinutes / 60.0, 1)
-| extend UtilisationPct = round(OperatingHours / available_hours * 100, 1)
+| extend UtilisationPct = round(OperatingHours / window_hours * 100, 1)
 | order by UtilisationPct desc;
 
 // ---------------------------------------------------------------------------
@@ -396,8 +453,20 @@ EquipmentTelemetry
 let shift_end = bin(now(), 8h);
 let shift_start = shift_end - 8h;
 let production = ProductionMetrics
-    | where SensorType == "load_tonnes" and Timestamp between (shift_start .. shift_end)
-    | summarize TotalTonnes = round(sum(Value), 0);
+    | where SensorType == "cycle_state"
+        and EquipmentType == "haul_truck"
+        and Timestamp between (shift_start .. shift_end)
+        and Quality == "good"
+        and Value == 3.0  // Dumping events = completed load deliveries
+    | summarize DumpCount = count()
+    | extend AvgPayload = toscalar(
+          ProductionMetrics
+          | where SensorType == "load_tonnes"
+              and Timestamp between (shift_start .. shift_end)
+              and Quality == "good" and Value > 5
+          | summarize avg(Value)
+      )
+    | project TotalTonnes = round(DumpCount * coalesce(AvgPayload, 50.0), 0);
 let alerts = EnvironmentalReadings
     | where Timestamp between (shift_start .. shift_end) and Quality == "good"
     | join kind=inner (AlertThresholds) on SensorType
