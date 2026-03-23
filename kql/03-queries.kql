@@ -77,27 +77,21 @@ EquipmentTelemetry
 | where SensorType == "vibration_mm_s"
     and Timestamp > ago(1h)
     and Quality == "good"
-| partition by EquipmentId (
-    order by Timestamp asc
-    | extend RollingAvg  = series_fir(Value, repeat(1, 90), true, true),  // ~15 min at 10 s interval
-            RollingStd  = series_fir(Value, repeat(1, 90), true, true)    // placeholder — computed below
-)
-// Simplified: compute stats over the window per equipment
 | summarize
     Avg15m   = avg(Value),
     Std15m   = stdev(Value),
     Latest   = arg_max(Timestamp, Value)
   by EquipmentId, bin(Timestamp, window)
 | extend UpperBound = Avg15m + (sigma_threshold * Std15m)
-| where Latest_Value > UpperBound
+| where Value > UpperBound
 | project
     EquipmentId,
     WindowEnd     = Timestamp + window,
-    LatestValue   = Latest_Value,
+    LatestValue   = Value,
     Avg15m        = round(Avg15m, 2),
     Std15m        = round(Std15m, 2),
     UpperBound    = round(UpperBound, 2),
-    Deviation     = round((Latest_Value - Avg15m) / Std15m, 1)
+    Deviation     = round((Value - Avg15m) / Std15m, 1)
 | order by Deviation desc;
 
 // ---------------------------------------------------------------------------
@@ -259,13 +253,13 @@ SafetyIncidents
     EnvironmentalReadings
     | where Quality == "good"
 ) on Zone
-| where EnvironmentalReadings_Timestamp between (WindowStart .. Timestamp)
+| where Timestamp1 between (WindowStart .. Timestamp)
 | summarize
     AvgValue = round(avg(Value), 2),
     MaxValue = round(max(Value), 2),
     MinValue = round(min(Value), 2),
     Readings = count()
-  by IncidentId, Incident_Timestamp = SafetyIncidents_Timestamp,
+  by IncidentId, Incident_Timestamp = Timestamp,
      Severity, IncidentDescription = Description,
      Zone, SensorType
 | order by Incident_Timestamp desc, SensorType asc;
