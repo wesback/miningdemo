@@ -216,3 +216,43 @@ Created `docs/CICD_SETUP.md` as a comprehensive, standalone CI/CD setup guide wi
 **Review Date:** 2026-03-20  
 **Session Log:** .squad/log/2026-03-20T14:02:19Z-code-review.md  
 **Orchestration Log:** .squad/orchestration-log/2026-03-20T14:02:19Z-ripley.md
+
+---
+
+## Dallas — Tutorial CI/CD Pointer
+
+**Date:** 2026-03-27  
+**Owner:** Dallas (Fabric Expert)  
+**Status:** Implemented  
+**Impact:** Documentation, User Onboarding  
+
+### Summary
+
+Added a minimal reference to `docs/CICD_SETUP.md` in the `mining-rti-tutorial.md` deployment overview section (blockquote note before Step 1). Users are now aware of both manual and automated deployment options before committing to either path.
+
+### Decision Rationale
+
+The tutorial comprehensively explains manual deployment via `deploy.py` but previously omitted the automated CI/CD option. Users should know about GitHub Actions automation before starting manual deployment, especially for production deployments requiring service principal authentication.
+
+### Placement Strategy
+
+- **Location:** Blockquote note immediately before Step 1 (workspace creation)
+- **Rationale:** Early enough to inform deployment path choice; follows deployment overview; doesn't disrupt step-by-step flow for manual users
+- **Format:** One-sentence, non-intrusive pointer
+
+### User Impact
+
+Users are now aware of both deployment options:
+1. **Manual:** Interactive `deploy.py` with browser auth (tutorial steps)
+2. **Automated:** GitHub Actions with service principal (CI/CD docs)
+
+Pointer is minimal and non-disruptive — users preferring the tutorial flow experience no friction.
+
+### Files Modified
+
+- `docs/mining-rti-tutorial.md` — Added CI/CD pointer blockquote before Step 1
+
+---
+
+**Session Log:** .squad/log/2026-03-23T12-17-43Z-cicd-tutorial-pointer.md  
+**Orchestration Log:** .squad/orchestration-log/2026-03-23T12-17-43Z-dallas.md

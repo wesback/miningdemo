@@ -228,3 +228,31 @@ This lesson transfers to Parker and all future schema work.
   - Tutorial examples now use coordinates consistent with simulator behavior
 - **Rationale:** Alignment with simulator site (Ontario coordinates); ensures tutorial examples match actual simulator behavior
 - **Cross-agent learnings:** Documentation and simulator now reference identical coordinate systems, eliminating discrepancies in location-based calculations
+
+### Fabric Doc Parity (2026-03-23)
+- **Key files:** `README.md`, `docs/mining-rti-tutorial.md`, `docs/CICD_SETUP.md`, `docs/user-stories.md`, `simulator/CONFIG_SCHEMA.md`, `simulator/config.sample.yaml`, `deploy.py`
+- **Pattern:** Keep canonical Fabric item names and source-of-truth terminology aligned across docs. In this repo, `deploy.py` is authoritative for `MiningRTI`, `MiningOps`, `MiningSensorStream`, `MiningOps-Queries`, and `Mining Operations`.
+- **Pattern:** For Fabric Eventstream custom endpoints, document the system-generated Event Hub name (`es_...`) instead of the stream display name.
+- **Pattern:** Keep simulator geography and sample coordinates aligned with the simulator implementation and architecture docs (Ontario / Sudbury Basin here).
+- **Why it matters:** Docs drift creates broken copy/paste steps and inconsistent setup instructions. Future doc reviews should compare README, tutorial, CI/CD, simulator examples, and KQL story IDs against the canonical deployment script.
+
+### 2026-03-27: Tutorial CI/CD Pointer Addition
+**Files changed:** `docs/mining-rti-tutorial.md`
+
+**Decision:** Added a reference to `CICD_SETUP.md` in the tutorial deployment overview section (before Step 1).
+
+**Rationale:** 
+- Tutorial comprehensively explains manual `deploy.py` deployment but didn't mention the automated CI/CD option
+- Users should know about GitHub Actions automation before starting manual deployment
+- Especially relevant for production deployments requiring service principal auth
+
+**Placement choice:**
+- Added as blockquote note immediately after deployment overview table, before Step 1
+- Appears early enough to inform deployment path choice
+- Doesn't disrupt step-by-step flow for users choosing manual path
+
+**Impact:** Users are now aware of both deployment options (manual interactive vs. automated CI/CD). Pointer is minimal and non-intrusive.
+
+**Status:** Merged to `.squad/decisions.md` on 2026-03-23  
+**Orchestration Log:** `.squad/orchestration-log/2026-03-23T12-17-43Z-dallas.md`  
+**Session Log:** `.squad/log/2026-03-23T12-17-43Z-cicd-tutorial-pointer.md`
