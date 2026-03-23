@@ -540,3 +540,194 @@ When Fabric UI shows "nothing" (vs explicit error):
 - Workflow deployed successfully (Run #23441323502)
 - Queryset now shows Data Sources panel correctly in Fabric UI
 
+
+---
+
+### 2026-03-27: Live Queryset Inspection — Schema Confirmed Correct, Non-Repo Root Cause
+
+**Investigation trigger:** "If it was deployed, it is still not working" — browser shows "no data source" after successful workflow run.
+
+**Methodology:**
+1. Fetched live queryset via `POST /v1/workspaces/{ws}/kqlQuerysets/{id}/getDefinition`
+2. Decoded base64 payload and compared against official MS docs schema
+3. Verified live KQL Database's `queryServiceUri` matches the queryset's `clusterUri`
+4. Checked Fabric capacity state via `/v1/capacities` API
+5. Tested cluster TCP reachability (HTTP 302 confirmed alive)
+6. Reviewed the most recent workflow run logs end-to-end
+
+**Live item findings (all ✅):**
+- Schema: `{"queryset": {"version": "1.0.0", "dataSources": [...], "tabs": [...]}}` — matches official docs exactly
+- `dataSources[0]`: `{id: "36b2bafa-79e9-5c04-98f6-448db534df65", clusterUri: "https://trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com", type: "AzureDataExplorer", databaseName: "MiningOps"}`
+- `clusterUri` matches live KQL Database `queryServiceUri` exactly
+- 28 tabs deployed; all have `dataSourceId` matching the dataSources UUID
+- `.platform` present with correct `type: "KQLQueryset"` and `logicalId`
+- Workflow log: auth OK, queryset found, DB found, query URI retrieved, 28 tabs built, `✓ Definition updated successfully.` (HTTP 200 immediate)
+- Fabric capacity `92f2b189-5362-4a07-82d8-810432fc2998` is `state: Active` (Trial FTL64, Sweden Central)
+- Cluster TCP-reachable (HTTP 302 in 0.3s)
+
+**Verdict: The repo, builder, and deployed item are all correct. The bug is not in the repo.**
+
+**Non-repo causes for "no data source" in browser (in probability order):**
+
+1. **Browser/Fabric UI cache (most likely)** — Fabric SPA caches item definitions aggressively. Even after a successful `updateDefinition`, the browser will show the stale version unless the user:
+   - Hard refreshes (Cmd+Shift+R on Mac, Ctrl+Shift+R on Win)
+   - Navigates away from the queryset and back (from the workspace item list)
+   - Uses an incognito/private window to bypass all cache
+   - Clears site data for `app.fabric.microsoft.com` in DevTools
+
+2. **Fabric UI behavior for Fabric-native KQL endpoints** — For `*.kusto.fabric.microsoft.com` clusters (Fabric Eventhouse), the KQL Queryset UI may require a manual "Connect" action in the sidebar even when the data source is defined in JSON. Look for a "Connect" button or collapsed cluster node in the left panel of the queryset editor.
+
+3. **KQL Database permissions** — The browser user's identity needs Workspace Admin/Member role OR explicit Eventhouse-level permissions. Workspace Admin grants full access automatically; Viewer may not.
+
+**Durable lesson:** When `updateDefinition` returns 200 and the decoded live JSON is correct, the issue is browser/UI state — not the API payload. Always test in an incognito window before diagnosing further.
+
+
+---
+
+### 2026-03-27: Live Queryset Inspection — MiningOps-Queries
+
+**Item URL:** `https://app.fabric.microsoft.com/groups/c7cc9e30-5045-4a5f-8f58-fdb3d1092589/queryworkbenches/13f4f414-49e8-474f-b4fb-b66d0d69b869`
+
+**Accessed via:** Fabric REST API `POST /v1/workspaces/{id}/items/{itemId}/getDefinition` with empty `{}` body.
+
+**Live Queryset — Confirmed Healthy:**
+- 28 tabs (21 operational + 7 predictive), correct `{"queryset": {...}}` outer wrapper
+- `version: "1.0.0"`, datasource `type: "AzureDataExplorer"` — both match deploy.py
+- DataSource cluster: `trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`, database: `MiningOps`
+- Tab IDs use `tab-*` for operational, `tab-pred-*` for predictive
+- `.platform` metadata present; `logicalId` is `00000000-0000-0000-0000-000000000000` (Fabric resets on update — expected)
+
+**Live Database — All 7 Tables Present:**
+- SensorReadings (15.9M rows), EquipmentTelemetry (7.8M), ProductionMetrics (4.2M), EnvironmentalReadings (3.9M)
+- AlertThresholds: 10 sensor types fully populated with warning/critical bands
+- EquipmentRegistry: 16 assets (CV-001/002/003, DR-001/002/003/004, ES-001/002/003, HT-001/002/003/004/005) — all Status=Active
+- SafetyIncidents: 95 records, last event 2026-03-10
+- 3 stored functions: EquipmentTelemetryFilter, EnvironmentalReadingsFilter, ProductionMetricsFilter
+
+**⚠️ Critical: Simulator NOT Running — Data Frozen at 2026-03-23T14:53:25Z**
+- All operational tables stopped at same timestamp → clean simulator shutdown, not a crash
+- Impact: queries using `ago(2m)`, `ago(5m)`, `ago(15m)` return 0 rows; `ago(7d)` returns empty
+- Predictive ML queries (7d lookback) also starved
+- Last active alerts (when data was live): CH4 breaches in Zone-B (2,262 events), CO in Zone-A (2,236 events)
+
+**API Gotcha Discovered:**
+- Resource-specific `GET /kqlQuerysets/{id}/getDefinition` → returns `EntityNotFound`
+- Generic `POST /items/{id}/getDefinition` with `{}` body → works correctly
+- This is an undocumented inconsistency in the Fabric preview API surface
+
+
+## 2026-03-23: Live Queryset Diagnostics — Data Pipeline Stalled
+
+**Session:** Background validation run  
+**Finding:** Queryset structurally healthy; data frozen at 2026-03-23T14:53:25Z
+
+### Summary
+Inspected live `MiningOps-Queries` queryset and KQL database. Confirmed:
+- All 28 tabs present and correctly configured
+- `{"queryset": {...}}` wrapper correctly applied
+- All 7 KQL tables and reference data healthy
+- No schema regressions from prior fixes
+
+**Critical:** Data pipeline halted. All time-series tables stopped at same timestamp, suggesting controlled shutdown. Dashboards and queries using `ago(N)` filters return empty results.
+
+### Recommendations
+- Restart simulator/data pipeline to restore live data flow
+- No code changes needed
+- Consider adding data freshness check query: `SensorReadings | summarize max(Timestamp)`
+
+### API Discovery
+`GET /kqlQuerysets/{id}/getDefinition` returns `EntityNotFound` even for valid items. Use `POST /items/{id}/getDefinition` with empty `{}` body instead.
+
+
+---
+
+## 2026-03-23 (later): AlertThresholds Duplicate Investigation & Fix
+
+**Trigger:** Lambert confirmed 26 duplicate rows per sensor type in `AlertThresholds`, causing 26x fanout in `ActiveAlerts` and `RecentBreaches` joins.
+
+**Root Cause:** `kql/02-reference-data.kql` used `.ingest inline into table AlertThresholds` — a pure append operation. `deploy.py` runs this file every deployment. With 26 duplicates, the deploy script was run 27 times, each appending all 11 rows again.
+
+**Same issue in EquipmentRegistry:** Same `.ingest inline` pattern. Live database showed 16 distinct equipment IDs vs. 15 in the seed (one possible duplicate). Fixed proactively.
+
+**Fix:** Replaced `.ingest inline` with `.set-or-replace <| datatable(...)` for both `AlertThresholds` and `EquipmentRegistry`. This is:
+- Atomic (full-table replace in one transaction)
+- Idempotent (safe to re-run any number of times)
+- Compatible with `deploy.py`'s `_classify_kql_command()` which already recognizes `.set-or-replace`
+
+**SafetyIncidents intentionally left as `.ingest inline`:** It holds operational incident records — wiping on re-deploy would destroy live data.
+
+**Live Fabric cleanup:** Run the `.set-or-replace AlertThresholds` block from the updated `kql/02-reference-data.kql` directly in a KQL Queryset connected to MiningOps. No other pipeline changes needed.
+
+**Key files:**
+- `kql/02-reference-data.kql` — fixed (use `.set-or-replace` for reference tables)
+- `.squad/decisions/inbox/dallas-alertthresholds-dedup-fix.md` — full decision with live cleanup SQL
+
+## Learnings
+
+**Pattern: Use `.set-or-replace` not `.ingest inline` for reference/lookup table seeding.** `.ingest inline` appends every run; `.set-or-replace` replaces atomically. Any table that is static reference data (AlertThresholds, EquipmentRegistry, etc.) should use `.set-or-replace <| datatable(...)` so deployments are idempotent.
+
+**Pattern: `deploy.py`'s `execute_kql_commands` parser handles `.set-or-replace` correctly.** The `_classify_kql_command` function already treats `.set-or-replace` as "important" severity. Multi-line datatable blocks are parsed correctly — comment lines between blocks serve as flush triggers.
+
+**Pattern: Live Kusto table dedup via `.set-or-replace` is atomic and safe.** When a reference table accumulates duplicates (e.g., 286 rows for 11 unique keys), running `.set-or-replace <| datatable(...)` atomically replaces the full table in a single transaction. Queries see either the old full set or the new clean set — no partial state. Safe to run during off-peak or while the simulator is paused. Pre/post counts verify success: `AlertThresholds | summarize count(), dcount(SensorType)`.
+
+**Live Fabric cleanup completed 2026-03-23:** AlertThresholds reduced from 286 rows (26 duplicates × 11 sensor types) to 11 canonical rows. Verified `TotalRows == UniqueSensorTypes == 11`, `IsClean = true`. The 26x fanout in `ActiveAlerts` and `RecentBreaches` joins is eliminated. Live cluster: `trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`, database: `MiningOps`.
+
+### 2026-03-23 — AlertThresholds Deduplication: Repo Fix + Live Cleanup
+- **Date:** 2026-03-23
+- **Type:** Data Ops / Fabric Live Maintenance
+- **Status:** Completed — Repo fix applied; live cleanup verified
+- **Impact:** Eliminated 26x fanout in alert joins; future deploys now idempotent
+
+#### Root Cause
+`kql/02-reference-data.kql` seeded `AlertThresholds` using `.ingest inline into table` — a pure append operation. Every `deploy.py` run appended another complete set of rows. With 26 duplicate rows per sensor type, the database was seeded 27 times (286 total rows instead of 11).
+
+#### Repo-Side Fix
+Converted both reference-table seeds from `.ingest inline` to `.set-or-replace ... <| datatable(...)`:
+- **AlertThresholds** — 11 canonical sensor types, now idempotent
+- **EquipmentRegistry** — 15 canonical rows, now idempotent
+- Left **SafetyIncidents** as `.ingest inline` — operational records, not reference data
+
+Why `.set-or-replace`:
+- Atomic full-table replace (sub-second transaction)
+- Idempotent — future `deploy.py` runs won't append duplicates
+- Classified as "important" by deploy.py (already handled)
+- Compatible with datatable expression syntax
+
+#### Live Cleanup Execution
+Applied the `.set-or-replace AlertThresholds` block directly against live Fabric Eventhouse:
+- **Cluster:** `trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`
+- **Database:** `MiningOps`
+- **Result:** 286 rows → 11 rows (clean)
+
+**Verification Query Result:**
+```
+TotalRows=11, UniqueSensorTypes=11, IsClean=true ✅
+```
+
+#### Before / After Impact
+
+| Metric | Before | After |
+|---|---|---|
+| AlertThresholds rows | 286 | 11 |
+| Duplicates per sensor type | 25 | 0 |
+| ActiveAlerts join fanout | 26x | 1x |
+| ActiveAlerts row count | 4,966 | ~191 |
+| RecentBreaches join fanout | 26x | 1x |
+| RecentBreaches row count | 66,274 | ~2,549 |
+
+#### Outcomes
+- Eliminates 26x fanout in `ActiveAlerts` and `RecentBreaches` joins
+- Activator/Data Activator triggers now fire correctly (1 alert per threshold crossing, not 26)
+- Future `deploy.py` runs are idempotent for both reference tables
+- No schema, queryset, dashboard, or Eventstream changes required
+
+#### Files Changed
+- `kql/02-reference-data.kql` — AlertThresholds and EquipmentRegistry seeds converted to idempotent pattern
+
+#### Cross-Team Context
+- **Lambert:** Identified bug #2 (AlertThresholds duplication) during live queryset validation
+- **Ash:** Simultaneously fixed 5 KQL query bugs (bugs #1, #3, #4, #5) in same session
+- **Combined impact:** Production system now data-correct; alert accuracy restored
+
+#### Decision File
+- Merged into `.squad/decisions.md` (2026-03-23): `dallas-alertthresholds-dedup-fix.md` and `dallas-alertthresholds-live-cleanup-complete.md`

@@ -17,7 +17,7 @@
   - For conditional queries, use: (1) separate queries with `union`, (2) filter results with `where`, or (3) accept empty results
   - **NEVER** use: `| union (iff(condition, <query>, datatable()[]))` — this is a parse-time semantic error
 - **Impact:** Queryset now opens successfully in Fabric UI. All 29 tabs load without runtime errors.
-- **Decision file:** `.squad/decisions/inbox/ash-queryset-iff-union-fix.md`
+- **Decision file:** `.squad/decisions.md (merged 2026-03-27)`
 
 **Cross-team context:** This was the final blocker after Lambert's schema fix (dataSource oneOf) and Parker's KQL join fixes. The combination of all three fixes enables complete end-to-end queryset deployment and runtime execution.
 
@@ -91,3 +91,59 @@
 
 **Decision file:** `.squad/decisions.md` (merged 2026-03-23 entries)
 
+### 2026-03-23 — Queryset Count Matches Live Update; Browser Error Likely Stale State
+- **Files:** `kql/03-queries.kql`, `kql/04-predictive-queries.kql`, `deploy.py`, `.github/workflows/update-queryset.yml`
+- **Observation:** The committed query surface still parses to **28 tabs** total: 21 production queries + 7 predictive queries.
+- **Workflow evidence:** The successful `Update KQL Queryset` run on commit `2a52891c8edbeabc5080e65609794f54368a63c8` logged `KQL Queryset: 28 individual query tabs` and `Queryset definition: version=1.0.0, dataSources=1, tabs=28`.
+- **Conclusion:** There is no query-count mismatch between repo and live update. If Fabric still shows a browser error, the smallest next step is a hard refresh / reopen to clear cached queryset state before changing KQL again.
+- **Tab-level note:** `ShiftHandoverSummary` is the only query that emits a `print` result plus a second tabular result (`top_anomalies`); if a single tab still fails after refresh, inspect that shape first.
+- **Decision file:** `.squad/decisions.md (merged 2026-03-27)`
+
+---
+
+### 2026-03-27: Live Error Follow-Up — 28 Tabs Still Match
+
+**Follow-up:** Latest workflow evidence still shows 28 tabs, and Dallas's live item-path recheck still points at the flat `dataSourceId` shape.
+
+**Lesson:** Once the KQL surface is stable, a lingering Fabric "Something went wrong" error is more likely stale browser/session cache than a fresh semantic regression.
+
+**Action:** Hard refresh/reopen first; if the error persists, treat it as a Fabric runtime issue instead of changing KQL again.
+
+## Learnings
+
+### 2026-03-23: Live data bug fixes — arg_max naming and continuous-sensor aggregation
+
+**KQL arg_max secondary column naming**
+When you write `Alias = arg_max(X, Y)` in KQL, the secondary column is renamed to `Alias_Y`, not `Y`. This silently breaks any downstream reference to `Y`. The safe pattern is always the tuple form: `(AliasX, AliasY) = arg_max(X, Y)`. Any named arg_max across the codebase should be audited for this bug.
+
+**Continuous sensor readings must never be summed for totals**
+`load_tonnes` is a continuous point-in-time reading, not a discrete event. `sum(Value)` inflates totals by the reporting frequency (e.g., 80 t × 3600 readings/hr = 288,000 t). Correct approach: count Dumping events (`cycle_state == 3`) and multiply by average payload. This pattern applies to any sensor representing "current state" rather than "event occurred". Affected: ShiftTonnageProgress, ProductionTrend7d, ShiftHandoverSummary.
+
+**arg_max by single key loses sensor type diversity**
+`arg_max(Timestamp, Value, SensorType) by EquipmentId` picks ONE reading per asset — whichever sensor fired most recently. Status logic requiring multiple sensor types (engine_temp, belt_speed, hydraulic_psi) must group by `(EquipmentId, SensorType)` first, evaluate per-sensor, then aggregate worst status.
+
+**EquipmentUtilisation window must span both data sources**
+`startofday(ago(1d))` = calendar yesterday is empty in a fresh demo (CSV ends before yesterday, live stream starts today). Use `ago(24h)` rolling window to span whatever data exists. Note in comments so future operators understand the trade-off.
+
+**Key file paths:**
+- `kql/03-queries.kql` — all production queries (fixed in commit db3eae9)
+- `kql/01-schema-setup.kql` — table schemas; ProductionMetrics contains load_tonnes + cycle_state for haul trucks
+- `kql/04-predictive-queries.kql` — ML queries (no arg_max issues found)
+
+### 2026-03-23 — KQL Query Fixes: arg_max Patterns & Continuous Sensor Aggregation (Commit db3eae9)
+- **Date:** 2026-03-23 16:13:48 +0100
+- **Commit:** `db3eae9` — fix(kql): fix 5 query bugs found during live data validation
+- **Context:** Lambert's live queryset validation identified 5 critical query bugs. Ash fixed HIGH-priority bugs #1, #3, #4, #5 with comprehensive KQL anti-pattern documentation.
+- **Bugs Fixed:**
+  1. **VibrationAnomalies (HIGH)** — Named `arg_max` silently dropped Value column; query returned 0 rows. Fixed with explicit tuple form `(MaxValue, LatestValue) = arg_max(Timestamp, Value)`
+  2. **EquipmentStatusSummary (MEDIUM)** — Single latest reading per asset failed multi-sensor status logic. Fixed by grouping by (EquipmentId, SensorType) to get per-sensor latest, then aggregating worst status
+  3. **ShiftTonnageProgress (HIGH)** — Summed continuous load sensor (weight) inflating by reporting frequency; reported 47,100% of target. Fixed by counting Dumping events (cycle_state == 3) × average payload
+  4. **ProductionTrend7d & ShiftHandoverSummary** — Related `arg_max` alias pattern issues fixed
+- **Key Patterns Documented:**
+  - **Rule: Named arg_max always uses tuple form** — `Alias = arg_max(X, Y)` renames Y to Alias_Y; subsequent `where Y` silently matches nothing. Always use `(AliasX, AliasY) = arg_max(X, Y)`
+  - **Rule: Never sum continuous sensor readings for business totals** — Continuous sensors (weight, speed) report every second; sum() inflates by reporting frequency. Use discrete event counting instead (e.g., count haul cycles × average payload)
+  - **Rule: Status from multiple sensor types requires per-type grouping** — Single latest reading per asset cannot evaluate 3+ sensor types independently. Group by (EquipmentId, SensorType) first
+- **Files Changed:** `kql/03-queries.kql` — 6 queries fixed
+- **Impact:** Eliminates silent failures in production queries; VibrationAnomalies now correctly identifies anomalies; ShiftTonnageProgress now accurate
+- **Cross-team:** Addresses Lambert's HIGH-priority bugs #1, #3, #5 and MEDIUM #4; Dallas simultaneously fixed bug #2 (AlertThresholds dedup)
+- **Decision file:** Merged into `.squad/decisions.md` (2026-03-23)

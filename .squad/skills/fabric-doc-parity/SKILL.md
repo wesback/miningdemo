@@ -19,6 +19,7 @@ Use this skill when reviewing or editing documentation that describes the same F
 - Document Fabric Eventstream custom endpoint names as system-generated `es_...` values, not the display name.
 - Keep geography, coordinates, and scenario framing consistent across simulator code and docs.
 - Use the same terminology for Eventhouse, KQL Database, Eventstream, and KQL Queryset in every doc.
+- When documenting queryset updates, state that a successful workflow run proves backend persistence only; users with an already-open queryset tab must hard refresh to see the new definition.
 
 ## Examples
 

@@ -1063,3 +1063,139 @@ The Fabric REST API endpoint `GET /kqlQuerysets/{id}/getDefinition` returns `Ent
 - No code changes needed
 
 ---
+# Decision: KQL arg_max Naming and Continuous Sensor Aggregation Patterns
+
+**Date:** 2026-03-23
+**Agent:** Ash (Data Engineer)
+**Type:** Coding Standard / Anti-pattern Documentation
+**Status:** Implemented (commit db3eae9)
+
+## Decisions
+
+### 1. Always use tuple form for named arg_max
+`Alias = arg_max(X, Y)` renames the secondary column to `Alias_Y` — references to `Y` silently return 0 rows. **Always** use `(AliasX, AliasY) = arg_max(X, Y)` for explicit naming.
+
+### 2. Never sum continuous sensor readings for business totals
+`sum(Value)` on sensors like `load_tonnes` (point-in-time weight reading) inflates by reporting frequency. For haul tonnage: count `cycle_state == 3` (Dumping) events × average payload. Any query computing a business total from a continuous sensor must use an event-counting approach.
+
+### 3. Status derived from a single latest reading is wrong when logic spans multiple sensor types
+`arg_max(Timestamp, *) by EquipmentId` selects ONE sensor reading per asset. Equipment status requiring multiple sensor types must group by `(EquipmentId, SensorType)` to get the latest per sensor, then aggregate worst status.
+
+### 4. Utilisation windows must use rolling lookback in demo environments
+`startofday(ago(1d))` creates an empty gap between CSV history and live stream. Use `ago(24h)` rolling window. Document the trade-off in query comments.
+
+## Files Changed
+- `kql/03-queries.kql` — EquipmentStatusSummary, VibrationAnomalies, ShiftTonnageProgress, ProductionTrend7d, ShiftHandoverSummary, EquipmentUtilisation
+
+
+---
+---
+
+
+# Decision: AlertThresholds Live Cleanup — Complete
+
+**Author:** Dallas  
+**Date:** 2026-03-23  
+**Status:** Done — verified live  
+**Affects:** Live MiningOps KQL database (AlertThresholds table)
+
+---
+
+## What Was Done
+
+Applied the `.set-or-replace AlertThresholds` block from `kql/02-reference-data.kql` directly against the live Fabric Eventhouse:
+
+- **Cluster:** `trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`
+- **Database:** `MiningOps`
+
+## Before / After
+
+| Metric | Before | After |
+|---|---|---|
+| Total rows | 286 | 11 |
+| Unique sensor types | 11 | 11 |
+| Duplicates per type | 25 | 0 |
+| `IsClean` | false | **true** |
+
+The 26x fanout in `ActiveAlerts` and `RecentBreaches` join paths is **eliminated**.
+
+## Verification Query
+
+```kql
+AlertThresholds
+| summarize TotalRows = count(), UniqueSensorTypes = dcount(SensorType)
+| extend IsClean = (TotalRows == UniqueSensorTypes)
+```
+
+Result: `TotalRows=11, UniqueSensorTypes=11, IsClean=true` ✅
+
+## No Other Tables Touched
+
+- `EquipmentRegistry` — not touched (already correct or needs separate review)
+- `SafetyIncidents` — intentionally untouched (operational records, not reference data)
+- All other tables — untouched
+
+## What's Next
+
+- The repo-side fix (`.set-or-replace` in `kql/02-reference-data.kql`) is already in place — future `deploy.py` runs are idempotent
+- Alert fanout issue is resolved; Activator / Data Activator triggers should now fire correctly (1 alert per threshold crossing, not 26)
+- Simulator restart is still needed to restore live time-series data flow (separate issue — stale data frozen at 2026-03-23T14:53:25Z)
+# Decision: AlertThresholds Duplicate Fix — Root Cause & Remediation
+
+**Author:** Dallas  
+**Date:** 2026-03-23  
+**Status:** Implemented  
+**Affects:** kql/02-reference-data.kql, live MiningOps KQL database
+
+---
+
+## Root Cause
+
+`02-reference-data.kql` was seeding `AlertThresholds` and `EquipmentRegistry` using `.ingest inline into table` — which is a **pure append** operation. Every `deploy.py` run appended another full set of rows. With 26 duplicate rows per sensor type confirmed by Lambert, the database has been seeded 27 times.
+
+## Fix Applied
+
+Converted both reference-table seeds from `.ingest inline` to `.set-or-replace ... <| datatable(...)`:
+
+- **`AlertThresholds`** — 11 canonical rows, now idempotent
+- **`EquipmentRegistry`** — 15 canonical rows, now idempotent
+
+`SafetyIncidents` was intentionally left as `.ingest inline` — it holds operational incident records, not a reference dataset. Re-deploying should not wipe live incidents.
+
+## Why `.set-or-replace`
+
+`.set-or-replace` is an atomic full-table replace. It is classified as `"important"` by `deploy.py`'s `_classify_kql_command()`, which already handles it. The datatable expression syntax is compatible with the KQL command parser in `execute_kql_commands()`.
+
+## Live Fabric Cleanup Required
+
+The live `MiningOps` database still holds the 297 duplicate rows (11 sensor types × 27 copies). To fix it, run the AlertThresholds block from the updated `kql/02-reference-data.kql` directly in a KQL Queryset connected to MiningOps:
+
+```kql
+.set-or-replace AlertThresholds <|
+datatable(SensorType:string, WarningLow:real, WarningHigh:real, CriticalLow:real, CriticalHigh:real, Unit:string, Description:string) [
+  "co_ppm",          0.0,    25.0,   0.0,    35.0,   "ppm",    "Carbon monoxide 8-hr TWA (OSHA PEL 50; action level 35)",
+  "ch4_pct",         0.0,    0.5,    0.0,    1.0,    "%LEL",   "Methane lower explosive limit percentage",
+  "ambient_temp_c",  10.0,   32.0,   5.0,    35.0,   "°C",     "Wet-bulb globe temperature limits",
+  "vibration_mm_s",  0.0,    7.1,    0.0,    11.2,   "mm/s",   "ISO 10816-3 vibration severity (Group 2)",
+  "hydraulic_psi",   1600.0, 4500.0, 1500.0, 5000.0, "PSI",    "Drill hydraulic system operating range",
+  "engine_temp_c",   70.0,   95.0,   60.0,   105.0,  "°C",     "Diesel engine coolant temperature",
+  "oil_pressure_kpa",200.0,  550.0,  150.0,  620.0,  "kPa",    "Engine oil pressure limits",
+  "belt_speed_m_s",  0.5,    6.0,    0.0,    7.0,    "m/s",    "Conveyor belt speed operating range",
+  "belt_load_kg_m",  0.0,    800.0,  0.0,    1000.0, "kg/m",   "Conveyor belt linear load density",
+  "humidity_pct",    20.0,   80.0,   10.0,   90.0,   "%",      "Relative humidity — high values indicate ventilation issues",
+  "dust_mg_m3",      0.0,    5.0,    0.0,    10.0,   "mg/m³",  "Respirable dust concentration (OSHA PEL 5 mg/m³)"
+]
+```
+
+Likewise for EquipmentRegistry (same `.set-or-replace` block, already in the updated file).
+
+## Impact
+
+- Eliminates 26x fanout in `ActiveAlerts` and `RecentBreaches` joins
+- Future `deploy.py` runs are idempotent for both reference tables
+- No queryset, dashboard, or Eventstream changes required
+- Live data pipeline unaffected — fix only touches the reference table, not SensorReadings or derived tables
+
+## Risk
+
+**None for repo.** For the live database, `.set-or-replace` is atomic — it replaces the entire table in one transaction. Queries that hit AlertThresholds between start and end of the command will briefly see no data (sub-second window in practice). Safe to run during off-peak or while simulator is paused.

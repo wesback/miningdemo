@@ -278,3 +278,85 @@ The queryset `dataSources[0].id` was `"mining-ops-source"` — a plain string, N
 
 **Validation Result:** `python3 validate_fabric_definitions.py` → ✅ PASSED (28 query tabs, UUID-format data source ID)
 
+---
+
+### 2026-03-23: Live Fabric Queryset Inspection — 5 Query Bugs Found
+
+**Context:** Direct inspection of the live queryset `MiningOps-Queries` (item `13f4f414-49e8-474f-b4fb-b66d0d69b869`, workspace `c7cc9e30-5045-4a5f-8f58-fdb3d1092589`) via Fabric REST API + direct KQL execution against the live cluster (`https://trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`, db `MiningOps`).
+
+**Live State — Healthy:**
+- ✅ 28/28 tabs load without schema errors
+- ✅ Data source UUID `36b2bafa-79e9-5c04-98f6-448db534df65` — correct format
+- ✅ 7 tables present: EquipmentTelemetry (7.86M rows), EnvironmentalReadings (3.93M), ProductionMetrics (4.19M), EquipmentRegistry (390), AlertThresholds (286), SafetyIncidents (95), SensorReadings
+- ✅ Live data flowing: max Timestamp = 2026-03-23T14:53:55Z (current)
+- ✅ GasThresholdBreaches: 54 active CO/CH4 alerts (CO at 45 ppm vs 35 threshold; CH4 at 1.49% vs 1.0% threshold)
+- ✅ HydraulicPressureDrops: 2 active drills below 1,500 PSI threshold (DR-001, DR-003)
+- ✅ Predictive queries (series_decompose_forecast, series_fit_line) working
+
+**Bugs Found:**
+
+**BUG 1 — HIGH: VibrationAnomalies always returns 0 rows (silent KQL bug)**
+- Root cause: `Latest = arg_max(Timestamp, Value)` creates a scalar `Latest` = max Timestamp; the second column `Value` is DROPPED after summarize.
+- `| where Value > UpperBound` references a non-existent `Value` column → null > X = false → all rows filtered out
+- With the correct approach (`max(Value)` per window), 9 anomalous windows ARE detected (DR-001, DR-002, DR-004, CV-003 all >9 mm/s, well above 3σ UpperBound of ~9.1)
+- This has been silently broken since deployment — no vibration anomalies have ever shown on dashboard or in alerts
+- Fix: replace `Latest = arg_max(Timestamp, Value)` with `MaxValue = max(Value)` and update the filter/project references; or use `by EquipmentId, WindowBin = bin(Timestamp, window)` + unnamed `arg_max(Timestamp, Value)` to expand both columns without alias conflict
+
+**BUG 2 — HIGH: AlertThresholds has 26 duplicate rows per sensor type**
+- AlertThresholds table has 286 total rows, 11 sensor types, 26 identical rows each
+- Joins in ActiveAlerts, RecentBreaches, ShiftHandoverSummary fan out 26x:
+  - ActiveAlerts: 4,966 rows with fan-out vs 191 rows with `| distinct` join
+  - RecentBreaches: 66,274 rows vs ~2,549 actual
+- Likely from repeated CSV ingest without deduplication on initial load
+- Fix: `AlertThresholds | distinct SensorType, WarningLow, WarningHigh, CriticalLow, CriticalHigh, Unit, Description` in all joins; or delete and reload the table data
+
+**BUG 3 — HIGH: ShiftTonnageProgress shows 47,100% of target (semantic error)**
+- Query does `sum(Value)` on `load_tonnes` sensor type, treating EACH telemetry reading as incremental production
+- In reality, `load_tonnes` is a continuous sensor (current load on truck), not a per-cycle delta
+- 13,183 readings × avg 180 tonnes each = 2,371,809 tonnes vs 5,000 tonne target → 47,100%
+- Fix: redesign query to count distinct loading events or accumulate only on state transitions; or discuss with Parker/Ash what `load_tonnes` actually represents per the simulator model
+
+**BUG 4 — MEDIUM: EquipmentUtilisation always returns 0 rows (data gap)**
+- `startofday(ago(1d))` = 2026-03-22 but no ET data exists for that day
+- Historical CSV ingest covers ~2025-12-20 to ~2026-03-21; live streaming restarted 2026-03-23
+- 2026-03-22 is an unreachable gap — this tab will be empty until the live stream has run for 24+ hours
+- Fix: use `startofday(now())` (today) instead of `startofday(ago(1d))` (yesterday), or add fallback to `ago(24h)` relative window
+
+**BUG 5 — MEDIUM: EquipmentStatusSummary returns only 1 status row (semantic design flaw)**
+- Query uses `arg_max(Timestamp, Value, SensorType) by EquipmentId` — picks ONE most-recent reading per equipment
+- Status case only checks `engine_temp_c`, `belt_speed_m_s`, and `hydraulic_psi` conditions
+- 4 equipment have `vibration_mm_s` as latest → always "Running" (vibration has no fault condition)
+- Right now: 12 equipment all classified "Running", even though 177 engine_temp_c readings and 179 hydraulic_psi readings exceed thresholds in the last 15 minutes
+- Fix: rewrite with `maxif/minif` per sensor type per equipment, then evaluate all sensors together; or restructure as a join across pivoted sensor readings
+
+**Key Cluster Facts (confirmed live):**
+- Cluster URI: `https://trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`
+- Database: `MiningOps`
+- Auth resource: `https://trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com` (specific cluster URI)
+- Token type: Bearer via `az account get-access-token --resource <cluster-uri>`
+- Live data starts: 2026-03-23 (today); historical: 2025-12-20 to 2026-03-21
+
+**Durable Pattern — Named arg_max Loses Secondary Columns:**
+In KQL, `X = arg_max(A, B)` creates a scalar `X` = max(A). Column `B` is DROPPED. Use one of:
+1. Unnamed: `arg_max(A, B)` expands both; works if no name conflict with `by` clause
+2. Named group key different from argmax key: `arg_max(A, B)` by `GroupKey = bin(A, window)` avoids the `A` naming conflict
+3. Separate aggregation: `MaxValue = max(B)` if latest-by-time isn't strictly required
+Always test arg_max results immediately — KQL won't error on the missing column, it silently returns null.
+
+
+## 2026-03-23: KQL Queryset Schema Validation — All Checks Passed
+
+**Session:** Background validation run  
+**Result:** ✅ Schema validation complete — no anomalies detected
+
+### Summary
+Validated live queryset definition against official Fabric API schema:
+- Outer `{"queryset": {...}}` wrapper correctly applied
+- All 28 tabs with proper structure: `{id, title, content, dataSourceId}`
+- Tab datasource IDs are flat strings (correct format, not nested objects)
+- Matches deploy.py output and MS Learn documentation
+- No regressions from recent fixes (commits `5c515ff`, `c8476c6`)
+
+### Status
+All schema validation checks passed. Queryset definition is structurally sound and ready for operation once data pipeline restarts.
+
