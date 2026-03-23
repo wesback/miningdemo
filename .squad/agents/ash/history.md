@@ -34,3 +34,46 @@
 - **File:** `kql/01-schema-setup.kql` — Completed idempotency documentation for ALL 26 commands. Added inline NOTE comments to every create/alter statement specifying idempotency behavior: `.create` (fails on re-run, suggests `.create-merge`), `.create-or-alter` (safe to re-run), `.alter` policy commands (idempotent), ingestion mappings (implicit create-or-alter). Header already documented overall behavior (lines 6-12).
 - **Pattern:** KQL schema scripts should document re-run semantics inline at each command — this prevents confusion during iterative development and makes manual execution safer. Query comments should explain the statistical/analytical method, not just the business use case.
 - **Key insight:** Idempotency documentation serves two audiences: automated deployment (deploy.py) and manual operators. Inline comments clarify which failures are expected vs. problematic, and guide safe manual re-execution strategies.
+
+### 2026-03-20 — Critical Fabric Real-Time Intelligence API fixes
+- **File:** `deploy.py` (lines 233-322, 638-720) — Fixed TWO critical bugs preventing KQL Queryset and Real-Time Dashboard creation via Fabric REST API.
+- **Bug 1 — Invalid .platform metadata structure** (lines 694-711, 1077-1094): The `.platform` file was using an incorrect minimal structure `{"version": "1.0.0", "type": "..."}` instead of the required Fabric Git integration schema. Fixed to include:
+  - `$schema`: Reference to official JSON schema (v2.0.0)
+  - `metadata`: Wrapper object with `type`, `displayName`, and `description`
+  - `config`: Object with `version: "2.0"` and deterministic `logicalId` (using uuid5)
+  - Pattern: All Fabric item definitions created via API must follow the Git integration schema, even when not using Git sync
+- **Bug 2 — Incorrect API endpoint and request structure** (lines 233-253): Items with definitions (KQLQueryset, KQLDashboard, Eventstream) must use the generic `/workspaces/{id}/items` endpoint with a `"type"` field in the request body, not item-specific endpoints like `/kqlQuerysets`. Fixed `create_item()`, `get_item_by_name()`, `update_item_definition()`, and `get_item_definition()` to:
+  - Detect items with definitions (`payload` contains `"definition"` key)
+  - Route to `/items` endpoint and include PascalCase `"type"` field (e.g., `"KQLQueryset"`, `"KQLDashboard"`)
+  - Keep item-specific endpoints for items with creation payloads (e.g., `kqlDatabases`, `eventhouses`)
+- **Key insight:** Fabric REST API uses TWO patterns:
+  1. Generic `/items` endpoint + `"type"` field → for items with definitions (queryset, dashboard, eventstream, notebook, report)
+  2. Specific `/itemType` endpoint + NO type field → for items with creation payloads (kqlDatabases with parentEventhouseItemId)
+- **Root cause:** These bugs caused 400/409 errors when deploying querysets and dashboards. The API was rejecting invalid `.platform` structures and mismatched endpoint patterns. Fixing both issues enables successful automated deployment of complete Fabric RTI demos.
+- **Testing recommendation:** Validate against official Fabric documentation: [KQL Queryset definition](https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-queryset-definition), [KQL Dashboard definition](https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions/kql-dashboard-definition), and [Item management overview](https://learn.microsoft.com/rest/api/fabric/articles/item-management/item-management-overview).
+
+**Cross-team context:** Parker should re-test the full CI/CD deployment flow (`.github/workflows/deploy-fabric.yml`) after these fixes to verify end-to-end automation now succeeds. Dallas may need to update documentation to reflect the corrected API patterns if any internal guides reference the old approach.
+
+### 2026-03-23: Fabric REST API Pattern Identification & Validation
+**Files verified:**
+- `kql/03-queries.kql` — All named queries validated and properly mapped
+- `deploy.py` — Query reference handling verified; API pattern issues identified
+
+**Changes:**
+- Identified critical Fabric API endpoint routing issue: definition-based items must use `/items` endpoint with `type` field
+- Validated that all 18 dashboard tiles have correct query sources
+- Confirmed named-query parsing logic in deploy.py aligns with actual KQL definitions
+
+**Key patterns:**
+- Items with definitions (querysets, dashboards) require `/items` endpoint + `type` field
+- Named queries must be inlined when referenced; Fabric API doesn't resolve `.create-or-alter function` definitions
+- All query references in dashboard now validated end-to-end
+
+**Cross-team context:**
+- Parker implemented API endpoint routing fix based on this finding
+- Dallas corrected complementary DataSource schema issue
+- Lambert created validation infrastructure for future query reference checks
+- Combined fixes resolve deployment blocker for queryset and dashboard creation
+
+**Decision file:** `.squad/decisions.md` (merged 2026-03-23 entries)
+

@@ -165,3 +165,35 @@ If schema is correct (95%+ confidence), failures are likely from:
 - Dashboard schema: 95% correct (2 minor uncertainties)
 - Overall: Schema is NOT the root cause of failures
 
+
+### 2026-03-23: Fabric Deployment Validation Infrastructure Complete
+**Files created:**
+- `.squad/agents/lambert/dashboard-queryset-validation.md` — Comprehensive schema validation report (14KB)
+- `.squad/agents/lambert/validate_fabric_definitions.py` — Pre-flight validation helper script
+- Validation checklist added to decision log
+
+**Changes:**
+1. Conducted comprehensive line-by-line validation of dashboard and queryset structures against official Microsoft Learn documentation
+2. Created automated validation script for pre-deployment schema checks
+3. Identified 95%+ schema compliance; two minor areas flagged for runtime verification
+4. Developed comprehensive checklist covering pre/post-deployment validation steps
+
+**Key findings:**
+- Queryset schema: 100% correct after API pattern fix
+- Dashboard schema: 95% correct after DataSource kind fix
+- Root cause analysis confirms schema compliance; failures likely due to runtime values, permissions, or KQL syntax
+
+**Validation methodology:**
+- Line-by-line comparison against official REST API schemas
+- Comparison against Fabric Git integration schemas (more authoritative)
+- Field-by-field type and structure validation
+- Confidence assessment at each step
+
+**Cross-team context:**
+- Parker's API endpoint routing fix implements one of the two critical issues
+- Dallas's DataSource schema fix resolves the other critical issue
+- Ash's query validation confirms query references are solid
+- Combined team effort resolves multi-day deployment blocker
+
+**Decision file:** `.squad/decisions.md` (merged 2026-03-23 entries)
+

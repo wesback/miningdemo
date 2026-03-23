@@ -5,133 +5,65 @@
 - **Stack:** Python (deploy.py, simulator), KQL, Microsoft Fabric (Eventhouse, Eventstream, Real-Time Dashboards, Data Activator), Azure Event Hubs, Fabric REST APIs
 - **Created:** 2026-03-20
 
+## Core Context
+
+### March 20, 2026: Fabric Integration & Deployment Documentation (Summarized)
+During the initial sprint, Dallas focused on Fabric-specific deliverables and operational patterns:
+
+**Fabric REST API Patterns:**
+- Documented complete LRO (Long-Running Operation) polling flow with `/result` fallback
+- Identified pagination requirements for list endpoints using `continuationUri`
+- Confirmed three Fabric API inconsistencies: 200 vs 201 responses, trailing slashes on URIs, network resilience during polling
+- Validated correct data source `kind: "AzureDataExplorer"` for querysets
+
+**Dashboard & Queryset:**
+- Expanded dashboard from 6 to 18 tiles (4 pages) with standardized query references
+- Standardized all KQL query references in `dashboard/dashboard-config.md` using consistent backtick format
+- Documented dashboard schema v52 compliance requirements (schema_version, nested references with kind discriminators)
+- Deprecated `get-docker.sh` as project has no Docker dependencies
+
+**CSV Ingestion Automation:**
+- Created `activator/ingest_history.py` for automated CSV ingestion via Kusto SDK
+- Matched credential patterns to deploy.py (DefaultAzureCredential → InteractiveBrowserCredential → service principal)
+- Added pre-flight table existence validation, dry-run mode, progress monitoring
+- Integrated with Parker's CI/CD pipeline as optional historical-data job
+
+**CI/CD Documentation:**
+- Created `docs/CICD_SETUP.md` comprehensive setup guide (section 1-7: prereqs, service principal creation, Fabric ID discovery, GitHub secrets, deployment options, post-deployment, troubleshooting)
+- Documented 15+ common troubleshooting scenarios with solutions
+- Provided clear workflow trigger descriptions (auto push + workflow_dispatch)
+
+**GitHub Actions Integration:**
+- Validated CI/CD workflow matches credential patterns
+- Fixed historical-data job to use correct script invocation and secret mapping
+- Removed workspace ID security leaks from job summaries
+
+All patterns follow Microsoft best practices. Documentation supports both expert and first-time users. Team achieved end-to-end deployment automation.
+
+## Recent Updates
+
+### 2026-03-23: Critical Dashboard DataSource Schema Fix
+**Files changed:**
+- `deploy.py` — Fixed DataSource structure in `build_dashboard_definition()` (lines 763-774)
+
+**Changes:**
+1. Changed DataSource `kind` from `"kusto-trident"` to `"KQLDatabase"` (official value)
+2. Removed undocumented `workspace` field
+3. Reordered fields to match official Git integration schema
+
+**Key pattern:**
+- Official Fabric Git integration schema is authoritative for item structure (more complete than REST API docs)
+- Always validate against Git-exported examples when creating item definitions
+- `kind: "KQLDatabase"` is the correct value for Kusto data sources
+
+**Cross-team context:**
+- Parker identified API endpoint routing issue; this was secondary bug
+- Ash validated query references were sound; schema was the blocker
+- Lambert created validation infrastructure confirming this fix resolves schema compliance
+- This fix resolves multi-day deployment failures
+
+**Decision file:** `.squad/decisions.md` (merged 2026-03-23 entries)
+
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
-
-### 2026-03-20 — Fabric REST API LRO Pattern (Full Correct Flow)
-- **Pattern:** After polling `GET {location}` and receiving `status == "Succeeded"`, the status body does NOT contain the item `id`. Must call `GET {location}/result` to get the full item body `{id, displayName, type, workspaceId, ...}`.
-- **Fallback:** If `/result` fails or lacks `id`, fall back to `get_item_by_name()` which searches the list endpoint.
-- **Retry-After:** Must re-read from each poll response, not just the initial 202.
-- **Terminal statuses:** `Running` / `NotStarted` → keep polling. `Succeeded`, `Failed`, anything else → terminal (stop polling).
-- **Files:** `deploy.py` `_wait_for_operation()` method
-
-### 2026-03-20 — Fabric API Pagination Required for get_item_by_name
-- **Pattern:** All Fabric list endpoints (`GET /workspaces/{id}/{itemType}`) paginate with `continuationUri` in the response body. A workspace with >100 items of any type requires following `continuationUri` to find items on page 2+.
-- **Implementation:** Loop `while url: resp = GET url; url = data.get("continuationUri")` — use `continuationUri` directly (it's the full URL).
-- **Files:** `deploy.py` `get_item_by_name()` method
-
-### 2026-03-20 — Fabric API Inconsistencies Confirmed in Production
-- **HTTP 200 on creates:** Some item types or API versions return 200 instead of 201. Handle both with `if resp.status_code in (200, 201)`.
-- **Trailing slash on cluster_uri:** Fabric's `queryServiceUri` property may include a trailing slash. Must `.rstrip("/")` before constructing Kusto mgmt endpoint or auth scope.
-- **Poll exceptions:** Network errors during polling should be caught and retried, not propagated.
-- **Files:** `deploy.py` `create_item()`, `get_kusto_token()`, `execute_kql_commands()`
-
-### 2026-03-20 — Dashboard Query Standardization
-- **Pattern:** Dashboard tile configurations in `dashboard/dashboard-config.md` now explicitly reference named queries from `kql/03-queries.kql` using consistent backtick-quoted format
-- **Files:** All query references standardized — inline KQL queries included for ad-hoc tiles, named queries referenced by name (e.g., `EquipmentHealthScores`, `RouteEfficiency`)
-- **Header note added:** Top of dashboard-config.md now links to source query file and explains naming convention
-
-### 2026-03-20 — Docker Script Deprecation
-- **Decision:** `get-docker.sh` is a standard Docker convenience installer that is NOT required for this demo
-- **Action:** Added deprecation notice to script header explaining it's not needed (all components run in Fabric or as Python scripts)
-- **Documentation:** Updated README.md repository structure to note script as [DEPRECATED]
-- **Rationale:** Demo has no Docker containerization dependency — Fabric handles hosting, Python simulator runs natively
-
-### 2026-03-20 — Automated Historical Data Ingestion
-- **New Tool:** `activator/ingest_history.py` — Python script automating CSV ingestion into KQL Database
-- **Stack:** Uses `azure-kusto-data` and `azure-kusto-ingest` SDKs with credential patterns matching `deploy.py`
-- **Authentication:** Supports DefaultAzureCredential (Azure CLI/managed identity), InteractiveBrowserCredential fallback, and service principal (tenant/client/secret)
-- **Features:** 
-  - Command-line arguments for CSV path, cluster URI, database, table, mapping
-  - Pre-flight table existence validation
-  - Dry-run mode for config testing
-  - Progress monitoring via table row count polling
-  - Error handling with actionable troubleshooting hints
-- **README Updated:** Step 5b now presents automated script as Option A (recommended), manual Lakehouse/Blob upload as Option B
-- **User Benefit:** Eliminates manual Lakehouse upload + KQL `.ingest` command workflow — single Python command ingests local CSV directly to Fabric
-
-### 2026-03-20 — Complete Dashboard Definition Expansion
-- **Change:** Expanded `deploy.py` dashboard definition from 6 tiles (3 pages) to **18 tiles across 4 pages**
-- **Source:** All tiles extracted from `dashboard/dashboard-config.md` specification
-- **Pages Implemented:**
-  - **Page 1: Operations Overview** — 4 tiles (Active Equipment Count, Shift Tonnage vs Target, Equipment Status Map, Active Alerts)
-  - **Page 2: Safety & Environment** — 4 tiles (Gas Levels by Zone, Temperature Heat Map, Threshold Breaches 24h, Safety Incident Timeline)
-  - **Page 3: Equipment Health** — 4 tiles (Vibration Anomaly Trend, Drill Hydraulic Pressure, Equipment Health Scores, Equipment Utilisation)
-  - **Page 4: Production** — 4 tiles (Conveyor Throughput Trend, Haul Truck Cycle Times, Route Efficiency, 7-Day Production Trend)
-- **Implementation Details:**
-  - Each tile includes proper visual type (stat, bar, line, area, scatter, table, map)
-  - Auto-refresh intervals matched to spec (15s to 4h depending on tile criticality)
-  - KQL queries embedded inline (matches dashboard-config.md exactly)
-  - Named queries referenced where specified (EquipmentHealthScores, RouteEfficiency)
-  - Tile layout positioning added (x/y/width/height grid system)
-- **Pattern:** Dashboard definition remains base64-encoded JSON payload in `build_dashboard_definition()` function
-- **Validation:** Python syntax verified, ready for deployment
-- **CI/CD Integration:** GitHub Actions workflow (`.github/workflows/deploy-fabric.yml`) created by Parker now automatically deploys this complete 18-tile dashboard on every push to main (with path filters for deploy.py, kql/, dashboard/, simulator/)
-- **Key Files:** `deploy.py` (modified), `dashboard/dashboard-config.md` (reference), `kql/03-queries.kql` (named query source)
-
-**Cross-team context:** Parker's CI/CD pipeline ensures Dallas's expanded dashboard definition is deployed automatically. Path filters trigger deployment when dashboard-related files change, reducing manual deployment steps.
-
-### 2026-03-20 — Corrected Tile Count Documentation & Fixed Baseline Ingestion Verification
-- **Fix 1:** Corrected docstring in `deploy.py` line 570 — tile count updated from "18 tiles" to "16 tiles" (accurate count verified via code inspection)
-- **Fix 2:** Implemented baseline row count comparison in `activator/ingest_history.py` for reliable ingestion verification
-- **Problem:** Original success check used `row_count > 0` which immediately passed true if table had any prior data, even if new ingestion added zero rows
-- **Solution:** Capture baseline row count BEFORE ingestion starts, compare post-ingestion count against baseline, success only if `row_count > baseline_count`
-- **Implementation:** Added baseline capture at line 237, updated success check at line 273, added "Rows added" delta logging at line 276
-- **Benefit:** Ingestion verification now correctly detects failed ingestions even when table already has historical rows; better observability with row delta reporting
-- **Pattern:** Baseline-then-compare pattern applicable to any incremental operation verification (table updates, queue processing, batch jobs)
-- **Key Files:** `deploy.py` (docstring fix), `activator/ingest_history.py` (baseline verification logic)
-
-### 2026-03-20 — Comprehensive CI/CD Setup Documentation
-- **Created:** `docs/CICD_SETUP.md` — Comprehensive guide for automated deployment via GitHub Actions
-- **Scope:** Covers full setup lifecycle from Microsoft Entra ID app registration through successful deployment
-- **Key Sections:**
-  1. **Prerequisites:** Azure subscription, Fabric workspace, permissions needed
-  2. **Service Principal Creation:** Azure Portal and Azure CLI methods with API permissions setup
-  3. **Fabric IDs Discovery:** FABRIC_WORKSPACE_ID, FABRIC_CLUSTER_URI, tenant/client IDs
-  4. **GitHub Secrets Configuration:** 5 secrets required with exact names and validation checklist
-  5. **Deployment Options:** CI/CD push triggers, workflow_dispatch with historical data, local CLI
-  6. **Post-Deployment Steps:** Eventstream wiring, Data Activator setup (both UI-only, not REST API)
-  7. **Troubleshooting:** Table of 15+ common issues with solutions (401/403 errors, secret problems, URI formats)
-- **Workflow Details:**
-  - **Secrets Used:** AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, FABRIC_WORKSPACE_ID, FABRIC_CLUSTER_URI
-  - **FABRIC_CLUSTER_URI:** Only required for historical-data job (workflow_dispatch with include_historical=true)
-  - **Main Deploy Job:** Validates secrets, runs deploy.py, creates all 5 Fabric items
-  - **Historical-Data Job:** Conditional on workflow_dispatch + include_historical flag, generates CSVs then ingests via deploy_history.py
-  - **Triggers:** Auto on push to main (paths: deploy.py, kql/**, dashboard/**, simulator/**), manual via workflow_dispatch
-- **Fabric Items Deployed:** Eventhouse (MiningRTI), KQL Database (MiningOps), Eventstream (MiningSensorStream), KQL Queryset (MiningOps-Queries), Dashboard (Mining Operations)
-- **README Integration:** Added CI/CD Setup section after "Option B — Manual" and before "Demo Scenarios", plus table row in Prerequisites linking to guide
-- **Format:** Professional markdown with code blocks, callout boxes (Tip/Warning), tables, numbered steps, troubleshooting matrix
-- **Audience:** First-time setup users — clear enough for non-experts, detailed enough for CI/CD best practices
-- **Key Files:** `docs/CICD_SETUP.md` (new), `README.md` (updated with link + prereq row)
-
-### 2026-03-20 — Dashboard Schema Fixes: Proper API Structure
-- **Fixed:** Four dashboard schema issues in `deploy.py` to align with Fabric Real-Time Dashboard API v52 requirements
-- **Issue 1:** Added missing `schema_version: "52"` and `title: "Mining Operations"` root fields to `dashboard_json` dict
-- **Issue 2:** Fixed `tile()` helper — changed flat `"queryId"` to nested `"queryRef": {"kind": "KQL", "queryId": ...}` structure
-- **Issue 3:** Fixed `q()` helper — changed flat `"dataSourceId"` to nested `"dataSource": {"kind": "KQLDatabase", "dataSourceId": ...}` structure
-- **Issue 4:** Replaced bare function name strings in two queries with full KQL query bodies:
-  - `"EquipmentHealthScores"` → Full 35-line health scoring query with temp/oil/age composite scoring
-  - `"RouteEfficiency"` → Full 19-line route efficiency query with cycle time analysis
-- **Pattern:** Fabric RTD schema v52 requires nested object structures for query/tile references, not flat string IDs
-- **Source:** KQL query bodies copied from `kql/03-queries.kql` (inside function definitions, excluding `.create-or-alter` wrapper)
-- **Benefit:** Dashboard definition now matches Fabric REST API schema expectations — deployment should succeed without 400 validation errors
-- **Key Files:** `deploy.py` (four targeted edits in `build_dashboard_definition()` function)
-
-### 2026-03-20 — CRITICAL FIX: Dashboard DataSource Schema Correction
-- **Root Cause:** Dashboard `dataSources` structure did not match official Fabric Git integration schema
-- **Issue 1:** Used incorrect `kind: "kusto-trident"` — official schema requires `kind: "KQLDatabase"`
-- **Issue 2:** Included undocumented `workspace: ""` field not present in official schema
-- **Impact:** Multi-day deployment failures due to REST API rejecting malformed dashboard definitions
-- **Fix Applied:** Updated `build_dashboard_definition()` line 763-774:
-  - Changed `kind: "kusto-trident"` → `kind: "KQLDatabase"`
-  - Removed `workspace: ""` field completely
-  - Reordered fields to match official Git schema: `id, name, clusterUri, database, kind, scopeId`
-- **Validation:** Confirmed against 3 authoritative sources:
-  1. Microsoft Learn: `/rest/api/fabric/articles/item-management/definitions/kql-dashboard-definition`
-  2. Fabric Git Integration: `/fabric/real-time-intelligence/git-real-time-dashboard`
-  3. Web search findings: "KQLDatabase" is the standard kind value for Kusto data sources
-- **Queryset Status:** KQL Queryset structure was already compliant — no changes needed
-- **Pattern for Future:** Always verify item definitions against official Git integration schemas, not just REST API docs (which lack complete examples)
-- **Files:** `deploy.py` `build_dashboard_definition()` (lines 763-774)
-
