@@ -70,3 +70,46 @@ All changes follow defensive coding patterns with zero breaking changes. Perform
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+### 2026-03-23: Deployment Script Requirements
+**Context:** Attempted deployment execution without workspace configuration.
+
+**Key findings:**
+- `deploy.py` requires `--workspace-id` (Fabric workspace GUID) as mandatory parameter
+- Alternative: Set `FABRIC_WORKSPACE_ID` environment variable
+- Authentication flow: Interactive browser (default) → Service principal (if credentials provided)
+- No workspace ID is currently configured in repo (no .env, no defaults)
+- Script uses azure-identity + requests for Fabric REST API calls
+- Workspace ID format: UUID/GUID from Fabric portal URL (https://app.fabric.microsoft.com/groups/<workspace-id>)
+
+**Deployment flow:** Eventhouse → KQL Database → schema/data → Eventstream → Queryset → Dashboard
+
+**To deploy:**
+```bash
+# Interactive (recommended for local)
+python3 deploy.py --workspace-id <GUID>
+
+# Service principal (for CI/CD)
+python3 deploy.py --workspace-id <GUID> --tenant-id <GUID> --client-id <GUID> --client-secret <SECRET>
+```
+
+### 2026-03-23: Fabric API Item Type Mismatch Fix
+**Context:** Deployment failed when reusing existing Eventhouse — `get_item_by_name()` couldn't find the item despite it existing.
+
+**Root cause:**
+- Fabric REST API endpoint names use plural/lowercase: `eventhouses`, `kqlDatabases`
+- Item types returned by `/items` use singular/PascalCase: `Eventhouse`, `KQLDatabase`
+- The `get_item_by_name()` method was comparing endpoint names to item types, causing mismatch
+
+**Fix applied:**
+1. Added `ENDPOINT_TO_TYPE` mapping dict in `FabricClient` class
+2. Created `_normalize_type()` method to convert endpoint names to item types
+3. Updated `get_item_by_name()` to use normalized type for comparison
+
+**Result:** Deployment now correctly identifies and reuses existing Fabric items, updating their definitions instead of failing.
+
+**Files modified:** `deploy.py` (lines 133-156, 278-299)
+
+**Example workspaces accessible:**
+- `c7cc9e30-5045-4a5f-8f58-fdb3d1092589` - MiningRTI-Demo (has capacity)
+- `ea9af2a6-9459-4019-8c7a-e5e45dcc616f` - My workspace (Personal, no capacity)

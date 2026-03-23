@@ -96,3 +96,28 @@ All patterns follow Microsoft best practices. Documentation supports both expert
 > all silent schema mismatches — the API returned a 4xx with an opaque message rather
 > than a helpful diff. Dry-running `build_*_definition()` with `python3 -c "..."` catches
 > these immediately.
+
+---
+
+### 2026-03-23: Fabric Schema v52 Hardening — Three Silent Bugs Fixed
+
+**Context:** Dashboard and queryset generation had three silent schema mismatches, discovered only via local payload inspection before deployment.
+
+**Bugs Fixed:**
+
+1. **Queryset Root Structure** — Removed outer `{"queryset": {...}}` wrapper. Root now has flat fields: `version`, `dataSources`, `tabs`.
+
+2. **Dashboard DataSource Kind** — Changed from `"kusto-trident"` to `"KQLDatabase"` (Git integration schema).
+
+3. **Dashboard schema_version Type** — Changed from string `"52"` to integer `52`.
+
+4. **Dashboard Query dataSourceId** — Flattened from nested `{"kind": "inline", "dataSourceId": "..."}` to simple `"dataSourceId": "..."` field.
+
+**Discovery Method:** None of these would have been caught by code review. All were silent schema mismatches where Fabric API returned opaque 4xx errors. Fix validated via:
+- Local base64 payload decoding and inspection
+- Schema conformance against official Fabric v52 specification
+- Live deployment to workspace c7cc9e30-5045-4a5f-8f58-fdb3d1092589 (succeeded end-to-end)
+
+**Durable Finding:** Fabric schema validation MUST include local dry-run decoding before any API submission. Pre-deployment checklist now includes `python3 -c "from deploy import ..."` to verify payloads.
+
+**Files:** `deploy.py` (functions `build_queryset_definition()`, `build_dashboard_definition()`)

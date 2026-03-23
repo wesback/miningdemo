@@ -688,3 +688,125 @@ If schema is correct, failures probably due to:
 - Dashboard schema: 95% correct (2 minor uncertainties resolved by runtime testing)
 - Overall: Schema is NOT the root cause of failures
 
+
+---
+
+## 2026-03-23: Fabric Item Definition Schema Rules (Dallas)
+
+**Date:** 2026-03-23
+**Author:** Dallas
+
+### Decision
+
+Three hard rules for all Fabric item definitions built in `deploy.py`:
+
+1. **KQL Queryset (`RealTimeQueryset.json`)** — root fields are `version`, `dataSources`, `tabs` with NO outer wrapper key. Do NOT wrap in `{"queryset": {...}}`.
+
+2. **KQL Dashboard (`RealTimeDashboard.json`)** — `schema_version` must be an integer (`52`), not a string. Queries in the `queries` array use flat `"dataSourceId": "<id>"`, NOT a nested `"dataSource": {"kind": "...", "dataSourceId": "..."}` object.
+
+3. **Validation practice** — before every deployment, run a local dry-run to decode the base64 payload and assert root keys.
+
+### Rationale
+
+All three bugs were silent schema mismatches. The Fabric API returned opaque 4xx errors without identifying the specific field. The bugs survived previous reviews because the JSON was never decoded and inspected locally.
+
+### Affected Files
+
+- `deploy.py` — `build_queryset_definition()`, `build_dashboard_definition()`
+
+### Impact
+
+Deployment pipeline now correct. Live deployment to workspace c7cc9e30-5045-4a5f-8f58-fdb3d1092589 succeeded with 29 queryset tabs and 16-tile dashboard deployed successfully.
+
+---
+
+## 2026-03-23: Fabric API Item Type Name Mapping (Parker)
+
+**Date:** 2026-03-23  
+**Owner:** Parker (Python Dev)  
+**Status:** Implemented  
+**Impact:** Deployment resilience, idempotency
+
+### Summary
+
+Fixed deployment script failure when reusing existing Fabric items. The issue was a mismatch between endpoint names (plural/lowercase) and item type names (singular/PascalCase) returned by the Fabric REST API.
+
+### Problem
+
+When running `deploy.py` against a workspace with existing items:
+- Script detects 409 conflict or "ItemDisplayNameAlreadyInUse" error
+- Calls `get_item_by_name()` to look up existing item
+- Fabric API returns different type naming (PascalCase vs endpoint names)
+- No match found → returns `None` → deployment aborts
+
+### Solution
+
+Added type normalization layer in `FabricClient`:
+```python
+ENDPOINT_TO_TYPE = {
+    "eventhouses": "Eventhouse",
+    "kqlDatabases": "KQLDatabase",
+}
+```
+
+Updated `get_item_by_name()` to use normalized type for lookups.
+
+### Consequences
+
+**Positive:**
+- ✅ Deployment is now idempotent
+- ✅ Existing items correctly identified and updated
+- ✅ No breaking changes
+
+**Negative:**
+- ⚠️ Mapping must be maintained if Microsoft adds new item types
+
+### Testing
+
+Verified against workspace `c7cc9e30-5045-4a5f-8f58-fdb3d1092589`:
+- Initial deployment: Creates all items ✅
+- Re-run: Finds existing items, updates definitions ✅
+- Result: 29 queries deployed, dashboard updated ✅
+
+### Related Files
+
+- `deploy.py` (FabricClient class)
+
+---
+
+## 2026-03-23: Validator Synced with deploy.py Fabric Schema v52 (Lambert)
+
+**Date:** 2026-03-23
+**Agent:** Lambert (Tester)
+**Type:** Test Infrastructure Fix
+**Status:** ✅ Complete
+
+### Summary
+
+`validate_fabric_definitions.py` was out of sync with actual structures `deploy.py` produces. When run, it reported four false failures. All four corrected; validator now runs end-to-end and passes.
+
+### Bugs Fixed
+
+| # | Field | Old check (wrong) | Correct check |
+|---|-------|-------------------|---------------|
+| 1 | Queryset root | Checked for wrapper | Flat: `version`, `dataSources`, `tabs` |
+| 2 | Dashboard DataSource.kind | Checked `"kusto-trident"` | Must be `"KQLDatabase"` |
+| 3 | Dashboard schema_version | Checked `isinstance(…, str)` | Must be `int` |
+| 4 | Dashboard query source | Checked nested object | Flat `dataSourceId` field |
+
+Additionally: Fixed `KeyError` in validator when accessing `qs_json["queryset"]` — changed to `qs_json.get("tabs", [])`.
+
+### Validation Result
+
+Running `python3 .squad/agents/lambert/validate_fabric_definitions.py`:
+```
+✅ Schema valid (29 query tabs)
+✅ Schema valid (16 tiles)
+RESULT: ✅ PASSED
+```
+
+### Impact
+
+Any team member can now run validator as pre-deployment smoke test to catch structural regressions before API submission.
+
+---

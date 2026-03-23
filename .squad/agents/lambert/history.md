@@ -242,3 +242,34 @@ RESULT: ✅ PASSED
 3. `queryRef.kind = "query"` — decisions.md says `"KQL"`, code says `"query"`. One is wrong.
 
 **Pattern:** Validator must be kept in sync with deploy.py. Any change to the JSON shapes in deploy.py must be mirrored in the validator. The `main()` function now does an end-to-end test (build + validate), making drift immediately visible.
+
+---
+
+### 2026-03-23: Validator Sync with deploy.py Fabric Schema v52
+
+**Context:** `validate_fabric_definitions.py` was out of sync after Dallas corrected four schema issues in deploy.py. Validator reported false failures against now-correct code.
+
+**Bugs Fixed:**
+
+1. **Queryset Root Check** — Removed wrapper validation; root now validated as flat `version`, `dataSources`, `tabs`.
+
+2. **Dashboard DataSource.kind Check** — Updated from `"kusto-trident"` to `"KQLDatabase"`.
+
+3. **Dashboard schema_version Check** — Changed from `isinstance(…, str)` to `isinstance(…, int)`.
+
+4. **Dashboard Query dataSourceId Check** — Flattened from nested object to simple field.
+
+5. **Runtime KeyError Fix** — Success path was accessing `qs_json["queryset"]` (old wrapper), causing failure even when validation passed. Fixed to `qs_json.get("tabs", [])`.
+
+6. **Docstring Update** — Fixed stale docstring in `deploy.py` line 778–779 (DataSource.kind documentation).
+
+**Validation Result After Fix:**
+```
+✅ KQL Queryset: Schema valid (29 query tabs)
+✅ Real-Time Dashboard: Schema valid (16 tiles across 4 pages)
+RESULT: ✅ PASSED
+```
+
+**Durable Pattern:** Validator is now a pre-deployment smoke test that any team member can run. It imports and executes deploy.py builders directly, making schema drift immediately visible. Any future change to JSON shapes in deploy.py must be mirrored in the validator.
+
+**Files:** `.squad/agents/lambert/validate_fabric_definitions.py`, `deploy.py` docstring
