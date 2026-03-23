@@ -18,6 +18,8 @@ Lambert's domain expertise covers:
 - **Validator as Pre-Flight Smoke Test:** Deploy.py builders are directly imported and tested. Schema drift is immediately visible.
 - **Value Assertion for Protocol Versions:** When a remote client enforces exact version integers (not just "must be int"), the validator should assert the exact value locally before deployment.
 - **Consistency Checks Required:** Any change to JSON structure in deploy.py must be mirrored in validate_fabric_definitions.py.
+- **ID Format Gap:** Validators must check not just presence of `id` fields but also format (UUID vs plain string). Fabric UI clients may silently reject non-UUID IDs even when the API accepts them.
+- **HTTP 200 ≠ UI Correct:** API accepting a definition update (HTTP 200) does not guarantee the Fabric UI will render it correctly. Always verify in UI after deployment.
 
 ### Key Files Owned
 - `.squad/agents/lambert/validate_fabric_definitions.py` — Pre-deployment validation helper (latest: schema_version=69 exact assertion)
@@ -219,3 +221,60 @@ Validators should actively reject incorrect patterns (not just check presence). 
 - Dallas: Documented error distinction patterns
 - Parker: Fixed KQL semantic errors + validated workflow
 - Validator now enforces schema parity across item types
+
+### 2026-03-23: Queryset "No Data Source" — Post-Fix Regression Diagnosis
+
+**Context:** After the flat `dataSourceId` fix (`c8476c6`) was deployed via workflow Run #6 (sha=`2a52891`), user reports "no data source" in incognito — ruling out client-side cache.
+
+**Findings:**
+1. Schema shape: ✅ correct per MS docs (flat dataSourceId, correct dataSources structure)
+2. Deployment: ✅ confirmed (HTTP 200, Run #6, explicit reason logged)
+3. Remaining mismatch: ❌ `dataSources[0].id = "mining-ops-source"` is a plain string, NOT a UUID
+4. MS docs example uses UUID for all `id` fields. Fabric UI client may silently reject non-UUID data source IDs.
+5. Validator gap: no UUID format check on dataSources[i].id
+
+**Hypothesis:** Fabric UI does UUID-format validation on data source IDs and silently drops entries that don't match, causing "no data source" in the UI panel even though the API accepts the payload.
+
+**Recommended fix:**
+- `deploy.py`: Change `ds_id = "mining-ops-source"` to `ds_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "mining-ops-datasource-mining-ops"))` (deterministic UUID, safe across re-deploys)
+- `validate_fabric_definitions.py`: Add UUID format check for `dataSources[i].id`
+- Re-trigger `update-queryset.yml` workflow after fix
+
+**Key IDs:**
+- Queryset: `db3dc49b-f1a1-42e2-b47a-3a7c3d3fc18c`
+- Database: `d1bfe4b5-40c0-4603-a748-3c8e5f9d4b9b`
+- Cluster: `https://trd-dxeq4t8vw8cxd1ahn7.z6.kusto.fabric.microsoft.com`
+
+**Decision note:** `.squad/decisions/inbox/lambert-queryset-no-datasource-diagnosis.md`
+
+### 2026-03-27: Queryset dataSources[i].id Must Be a UUID — Final Root Cause & Validator Enhancement
+
+**Context:** Despite correct wrapper (`{"queryset": {...}}`), correct tab schema (nested `dataSource` oneOf), and correct deployment workflow, browser showed "no Data Sources" in the data sources panel of the queryset UI.
+
+**Root Cause Identified (via Dallas's live inspection):**
+The queryset `dataSources[0].id` was `"mining-ops-source"` — a plain string, NOT a UUID. The official MS docs example uses UUIDs for all `id` fields. The Fabric UI client performs UUID format validation at render time and silently drops non-UUID data source entries from the panel, even though the API accepts the payload with HTTP 200.
+
+**Pattern Confirmed (third instance):**
+- 2026-03-20: Missing outer wrapper → API 201, UI empty
+- 2026-03-23: Wrong schema_version type → API 200, UI migration error  
+- 2026-03-27: Non-UUID data source ID → API 200, UI "no data source"
+
+**Heuristic:** When Fabric UI shows nothing (vs an error), suspect a field format/type mismatch accepted by API but rejected by UI client at render time.
+
+**Fix Applied:**
+1. **Validator enhancement** (`.squad/agents/lambert/validate_fabric_definitions.py`):
+   - Added UUID format check for `dataSources[i].id` — was checking presence only, now validates format
+   - Severity: ERROR (not warning) — format mismatch will fail validation
+   - Added comment documenting the pattern: "Fabric UI silently discards non-UUID data source entries"
+
+2. **Code fix** delegated to Parker in `deploy.py`:
+   - Changed `ds_id = "mining-ops-source"` to deterministic UUID5
+   - Final seed: `"mining-ops-datasource-mining-ops"` → `36b2bafa-79e9-5c04-98f6-448db534df65`
+
+**Lessons for Validator:**
+- **ID Format Validation:** Not all `id` fields are optional or string-only. When a field is called `id` and the example uses UUID, enforce UUID format locally.
+- **Format Mismatches Are Silent:** The API may not validate format (returns HTTP 200), but the UI client will. The validator is the last defense before deployment.
+- **Schema Parity:** Dashboard and queryset share common Fabric Git schemas. When one item type requires UUID for a field, check if related types have the same requirement.
+
+**Validation Result:** `python3 validate_fabric_definitions.py` → ✅ PASSED (28 query tabs, UUID-format data source ID)
+

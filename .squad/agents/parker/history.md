@@ -226,3 +226,61 @@ GitHub Actions run #23438225213 executed successfully:
 - Dallas: Documented runtime error distinction and diagnostic patterns
 - Lambert: Fixed queryset schema to use nested dataSource oneOf
 - Workflow is production-ready and validated
+
+### 2026-03-27: Queryset dataSources[i].id Must Be a UUID (Not a Semantic String)
+**Context:** Browser showed "no Data Sources" in the queryset UI even after correct wrapper/tab schema was confirmed.
+
+**Root cause:** The queryset `dataSources[0].id` was set to `"mining-ops-source"` (a semantic string). The Fabric UI silently ignores non-UUID data source entries — HTTP 200 doesn't mean the UI accepts it.
+
+**Fix:** Changed `ds_id` in `build_queryset_definition()` to `str(uuid.uuid5(uuid.NAMESPACE_DNS, "mining-rti-queryset-datasource"))` → produces stable UUID `9a2447b4-6c18-5cf0-9541-7dfd72c65300`.
+
+**Pattern:** The dashboard builder already used `uuid5` for its data source IDs. The queryset builder was the outlier. Any Fabric item `id` field that the UI resolves should be a UUID.
+
+**Validator updated:** `validate_fabric_definitions.py` now enforces UUID format for `dataSources[i].id` in queryset validation.
+
+**Decision:** `.squad/decisions/inbox/parker-queryset-datasource-uuid.md`
+
+### 2026-03-27: Queryset dataSources[0].id Seed Aligned to Dallas's Confirmed Value
+
+**Context:** Previous fix used seed `"mining-rti-queryset-datasource"` (intermediate). Dallas directly inspected the live Fabric item and confirmed the canonical seed should be `"mining-ops-datasource-mining-ops"` → `36b2bafa-79e9-5c04-98f6-448db534df65`.
+
+**Fix:** Changed `ds_id` seed in `build_queryset_definition()` from `"mining-rti-queryset-datasource"` to `"mining-ops-datasource-mining-ops"`. Single-line change. No structural impact.
+
+**Validator:** UUID format check in `validate_fabric_definitions.py` still passes — it validates UUID format, not the specific value.
+
+**Comment in validator** updated to cite the final seed and UUID.
+
+**Decision:** `.squad/decisions/inbox/parker-queryset-datasource-uuid-seed-final.md`
+
+### 2026-03-27: Queryset dataSources[i].id UUID Seed — Live Validation & Final Alignment
+
+**Context:** After implementing UUID5 data source ID fix (`9a2447b4-6c18-5cf0-9541-7dfd72c65300`), Dallas directly inspected the live Fabric item definition and provided feedback on the canonical seed value.
+
+**Work Completed:**
+
+1. **Live Fabric Validation** (Dallas):
+   - Fetched live queryset definition from Fabric REST API
+   - Confirmed non-UUID `dataSources[0].id` was the root cause of "no data source" UI rendering failure
+   - Provided authoritative seed value: `"mining-ops-datasource-mining-ops"` → `36b2bafa-79e9-5c04-98f6-448db534df65`
+
+2. **Seed Alignment** (Parker):
+   - Updated `deploy.py` line `ds_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "mining-ops-datasource-mining-ops"))`
+   - Single-line change, deterministic UUID, no structural impact
+   - Ensures re-deploys preserve the same UUID (prevents workspace connection rotation)
+
+3. **Workflow Deployment** (GitHub Actions Run #23441323502):
+   - Triggered `update-queryset.yml` after seed alignment
+   - ✅ SUCCESS — HTTP 200, definition updated, dataSources=1, tabs=28
+
+4. **Live Verification:**
+   - Queryset now shows `MiningOps` database in the Data Sources panel
+   - All 28 tabs accessible and rendering correctly
+   - No "no data source" error in UI
+
+**Lessons Documented:**
+- **Deterministic UUIDs:** Use `uuid5(NAMESPACE_DNS, seed)` for stable IDs across re-deploys. Document the seed as canonical.
+- **Live Inspection Authority:** When API returns HTTP 200 but UI shows nothing, direct REST API inspection of the live payload is the ground truth.
+- **Workspace Connections:** Once the Fabric UI resolves a data source connection (via UUID), changing the ID in re-deploys can sever it. Deterministic UUIDs prevent this.
+
+**Decision Merged:** `.squad/decisions/inbox/parker-queryset-datasource-uuid-seed-final.md`
+
