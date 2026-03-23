@@ -71,10 +71,12 @@ A **service principal** (enterprise application) allows GitHub Actions to authen
    - Select **APIs my organization uses**
    - Search for `Power BI Service` or `Microsoft Fabric`
    - Select **Power BI Service**
-   - Choose **Delegated permissions** or **Application permissions** (depending on your org policy)
-   - Select the permission: `https://api.fabric.microsoft.com/.default` or `Workspace.ReadWrite.All`
+   - Choose **Application permissions** (not Delegated permissions)
+   - Add the Fabric/Power BI workspace permission your tenant requires, such as `Workspace.ReadWrite.All`
    - Click **Add permissions**
    - If required by your organization, click **Grant admin consent for [Your Organization]**
+
+> **Note:** `https://api.fabric.microsoft.com/.default` is the OAuth scope used by the deployment script, not a portal permission you add in App registrations.
 
 > **Tip:** Some organizations require admin consent for API permissions. If you see a warning icon, contact your Microsoft Entra ID administrator.
 
@@ -293,7 +295,41 @@ Trigger the deployment manually from the GitHub UI, with optional historical dat
 
 ---
 
-### Option C: Local CLI Deployment
+### Option C: Quick Queryset Update (Query-Only)
+
+If you've already deployed once and only need to update the KQL queries (no schema changes), use the **Update KQL Queryset** workflow for fast iteration:
+
+**When to use:**
+- Fixed a query syntax error
+- Updated query logic or filters
+- Added/removed query tabs
+- Database schema hasn't changed
+
+**Triggers automatically on:**
+- Push to `main` with changes to `kql/**`
+
+**Manual trigger:**
+1. Navigate to **Actions** tab
+2. Click **Update KQL Queryset**
+3. Click **Run workflow**
+4. (Optional) Add a reason for the update
+5. Click **Run workflow**
+
+**What it does:**
+- Finds existing `MiningOps-Queries` queryset
+- Reads latest queries from `kql/` directory
+- Updates queryset definition (bypasses full deploy)
+- Completes in ~30 seconds
+
+**Requirements:**
+- Queryset must already exist (run full deploy first)
+- Same secrets as full deploy (`FABRIC_WORKSPACE_ID`, etc.)
+
+> **Note:** This workflow does NOT modify database schema or create tables. If you changed table structures, use the full deployment workflow instead.
+
+---
+
+### Option D: Local CLI Deployment
 
 Run the deployment script directly from your local machine.
 
@@ -326,6 +362,12 @@ python deploy.py --workspace-id <your-workspace-guid>
 ```
 
 This will open a browser window for Microsoft Entra ID authentication.
+
+**Quick queryset-only update (local):**
+```bash
+# Update only the KQL Queryset with latest queries from kql/
+python update_queryset.py --workspace-id <your-workspace-guid>
+```
 
 **What gets deployed:**
 - For a complete list of Fabric items and schema details, see the [README Deployment Guide](../README.md#deployment-guide)
