@@ -1009,3 +1009,57 @@ Official MS docs tab schema (decoded from base64): `{"id": "...", "content": "..
 **Decision:** KQL Queryset tab datasource = flat `"dataSourceId"` string. RTD query datasource = nested `"dataSource"` object. These two item types use DIFFERENT schemas — never cross-apply.
 
 **Fix:** `deploy.py` + `validate_fabric_definitions.py` updated. Commit `c8476c6`. To apply to live item, run `update-queryset.yml` (5 min) or wait for `deploy-fabric.yml` to complete (triggered by push).
+
+---
+
+## 2026-03-27: Live Queryset Confirmed Healthy — Simulator Needs Restart
+
+**Date:** 2026-03-27  
+**Agent:** Dallas  
+**Type:** Operational Finding / Action Item  
+**Status:** In Progress — Awaiting Simulator Restart
+
+### Context
+Live inspection of `MiningOps-Queries` queryset (ID: `13f4f414-49e8-474f-b4fb-b66d0d69b869`) and MiningOps KQL database during background diagnostics.
+
+### Findings
+
+**Queryset Structure:** ✅ **Healthy**
+- 28 tabs confirmed live (21 operational + 7 predictive, matches repo)
+- `type: "AzureDataExplorer"` datasource structure matches deploy.py exactly
+- Outer `{"queryset": {...}}` wrapper present — no regression from commit `5c515ff`
+- All tab IDs in correct format (`tab-*`, `tab-pred-*`)
+- `.platform` metadata valid
+
+**KQL Database Assets:** ✅ **Fully Populated**
+- 7 tables present with correct schemas
+- AlertThresholds reference data: 10 sensor types configured
+- EquipmentRegistry: 16 assets across 4 types (haul_truck, conveyor, drill, environmental_sensor), all Active
+
+**Data Pipeline:** 🔴 **Critical — Stalled**
+- All time-series tables frozen at `2026-03-23T14:53:25Z`
+- Simulator stopped cleanly (simultaneous halt across all tables indicates controlled shutdown, not crash)
+- **Immediate Impact:** Dashboard tiles and queryset tabs using `ago(N)` filters return empty results
+- **Secondary Impact:** Predictive ML queries cannot execute without recent data
+
+**Schema Validation:** ✅ **Passed**
+- Lambert confirmed tab datasource IDs are flat strings (not nested objects)
+- Matches official MS Fabric API schema and deploy.py output
+- No regressions from recent fixes (commits `c8476c6`, `5c515ff`)
+
+### Decision / Action Required
+
+1. **Restart the simulator/data pipeline** to restore live data flow (required before any demo or full validation)
+2. **No code changes needed** — deploy.py and queryset schema are correct
+3. **Optional enhancement:** Add data freshness check to queryset: `SensorReadings | summarize max(Timestamp)` to surface staleness quickly in dashboard
+
+### Team Note: Fabric API Quirk
+
+The Fabric REST API endpoint `GET /kqlQuerysets/{id}/getDefinition` returns `EntityNotFound` even for valid items. Workaround: Use `POST /items/{id}/getDefinition` with `Content-Type: application/json` and `{}` body instead. This is an undocumented inconsistency in the preview API.
+
+### Files Involved
+- `MiningOps-Queries` queryset (live Fabric item)
+- `MiningOps` KQL database
+- No code changes needed
+
+---
