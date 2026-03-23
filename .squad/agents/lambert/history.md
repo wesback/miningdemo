@@ -197,3 +197,48 @@ If schema is correct (95%+ confidence), failures are likely from:
 
 **Decision file:** `.squad/decisions.md` (merged 2026-03-23 entries)
 
+
+
+---
+
+### 2026-03-23: Validator Sync Audit — Four False Failures Found and Fixed
+
+**Context:** Asked to re-validate the Fabric definition validator against what deploy.py actually produces. Previous validation work was done against an older version of deploy.py that has since been updated by Dallas and others.
+
+**Methodology:**
+- Ran deploy.py's `build_queryset_definition` and `build_dashboard_definition` with stub parameters
+- Inspected decoded JSON structure directly
+- Fed actual output into the existing validator
+- Compared errors against code and decisions.md
+
+**Bugs Found in `validate_fabric_definitions.py` (all fixed):**
+
+1. **Queryset root wrapper (WRONG):** Checked for `{"queryset": {...}}` wrapper. Actual output has flat root fields `version/dataSources/tabs` (per official docs "Queryset root fields version/dataSources/tabs"). Fixed: removed wrapper check.
+
+2. **Dashboard `dataSources.kind` (STALE):** Checked for `"kusto-trident"`. Code emits `"KQLDatabase"` per Dallas's v52 fix. Fixed: updated check to `"KQLDatabase"`.
+
+3. **Dashboard `schema_version` type (WRONG):** Checked `isinstance(…, str)`. Code emits integer `52` with deploy.py comment "integer, not string — Fabric RTD schema requires int". Fixed: check for `int`.
+
+4. **Dashboard `queries[i]` data source (STALE):** Checked for nested `{"kind": "inline", "dataSourceId": …}` object. Code emits flat `"dataSourceId"` field. Fixed: check for flat field.
+
+5. **Runtime `KeyError` in main():** After fixing the queryset structure check, the success path accessed `qs_json["queryset"]` (old wrapper key), causing a `KeyError` even when validation passed. Fixed: changed to `qs_json.get("tabs", [])`.
+
+**Also fixed:** Stale docstring in `deploy.py` line 778-779 still said `"kusto-trident"`. Updated to `"KQLDatabase"`.
+
+**Validator now passes clean:**
+```
+✅ KQL Queryset: Schema valid (29 query tabs)
+✅ Real-Time Dashboard: Schema valid (16 tiles across 4 pages)
+RESULT: ✅ PASSED
+```
+
+**Key Files Changed:**
+- `.squad/agents/lambert/validate_fabric_definitions.py`: 4 logic fixes + functional main() that imports builders
+- `deploy.py`: Stale docstring corrected
+
+**Unresolved (needs live deployment to confirm):**
+1. `multistat` vs `multi-stat` visual type — no API error confirmed
+2. Grid column count — 20-column assumed, needs confirming
+3. `queryRef.kind = "query"` — decisions.md says `"KQL"`, code says `"query"`. One is wrong.
+
+**Pattern:** Validator must be kept in sync with deploy.py. Any change to the JSON shapes in deploy.py must be mirrored in the validator. The `main()` function now does an end-to-end test (build + validate), making drift immediately visible.
