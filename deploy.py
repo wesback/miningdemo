@@ -680,7 +680,10 @@ def build_queryset_definition(cluster_uri: str, database: str, queryset_name: st
     predictive_file = PROJECT_ROOT / "kql" / "04-predictive-queries.kql"
 
     tabs: list[dict[str, str]] = []
-    ds_id = "mining-ops-source"
+    # Deterministic UUID5 — stable across re-deploys; matches Fabric UI expectation
+    # for dataSource ids (semantic strings are silently ignored by the UI).
+    # Seed confirmed by Dallas after live inspection: yields 36b2bafa-79e9-5c04-98f6-448db534df65.
+    ds_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "mining-ops-datasource-mining-ops"))
 
     if queries_file.exists():
         for name, body in _parse_production_queries(queries_file.read_text()):

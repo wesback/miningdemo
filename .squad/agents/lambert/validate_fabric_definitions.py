@@ -74,6 +74,17 @@ def validate_queryset_structure(queryset_json: Dict[str, Any]) -> List[str]:
         for i, ds in enumerate(qs["dataSources"]):
             if "id" not in ds:
                 errors.append(f"Missing 'dataSources[{i}].id'")
+            else:
+                # Fabric UI expects a UUID, not a semantic string.
+                # deploy.py uses uuid5(NAMESPACE_DNS, "mining-ops-datasource-mining-ops")
+                # → 36b2bafa-79e9-5c04-98f6-448db534df65 (confirmed stable by Dallas).
+                try:
+                    uuid.UUID(ds["id"])
+                except ValueError:
+                    errors.append(
+                        f"'dataSources[{i}].id' must be a UUID, got '{ds['id']}' "
+                        f"(semantic strings are silently ignored by the Fabric UI)"
+                    )
             if "clusterUri" not in ds:
                 errors.append(f"Missing 'dataSources[{i}].clusterUri'")
             if "type" not in ds:
